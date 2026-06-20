@@ -1,0 +1,16 @@
+{
+  "name": "Nova AI Workspace",
+  "short_name": "Nova AI",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#030612",
+  "theme_color": "#4A00E0",
+  "description": "Premium AI study platform for students. Features dynamic planners, doubt solvers, and career tools.",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "192x192 512x512",
+      "type": "image/x-icon"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Nova AI Workspace",
+  "description": "Premium AI study platform for students. Features dynamic planners, doubt solvers, and career tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

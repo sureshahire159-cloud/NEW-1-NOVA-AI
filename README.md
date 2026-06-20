@@ -1,11 +1,32 @@
-<div align="center">
+# Nova AI Workspace
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+Premium AI study platform for students. Features dynamic planners, doubt solvers, and career tools.
 
-  <h1>Built with AI Studio</h2>
+## Features
+- **Dashboard Tab**: Study Analytics and Progress Tracking 
+- **Planner Tab**: AI-Generated Study Plans and Timetables
+- **Arsenal Tab**: Doubt Solving, Quiz Generation, and Career Studios
+- **Profile Tab**: Theme Toggling and Identity Customization
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+## Setup Instructions
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+1. Install dependencies:
+   ```bash
+   npm install
+   ```
 
-</div>
+2. Configure Environment Variables:
+   Copy `.env.example` to `.env` and provide the required API keys (e.g. Firebase config, Nvidia API key).
+
+3. Start dev server:
+   ```bash
+   npm run dev
+   ```
+
+## Technologies
+- React
+- Vite
+- Tailwind CSS
+- Firebase (Auth, Firestore)
+- Node.js
+- Express
