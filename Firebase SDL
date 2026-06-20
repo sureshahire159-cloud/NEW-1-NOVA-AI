@@ -1,0 +1,17 @@
+// Import the functions you need from the SDKs you need
+import { initializeApp } from "firebase/app";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
+
+// Your web app's Firebase configuration
+const firebaseConfig = {
+  apiKey: "AIzaSyBxBjp1sm8fdORJEw_PFGX3rJtpnp4QiNM",
+  authDomain: "nova-ai-1-839c2.firebaseapp.com",
+  projectId: "nova-ai-1-839c2",
+  storageBucket: "nova-ai-1-839c2.firebasestorage.app",
+  messagingSenderId: "950813749790",
+  appId: "1:950813749790:web:2e3302e94424e0a816f40f"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
