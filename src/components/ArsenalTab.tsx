@@ -366,6 +366,11 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
         })
       });
 
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`API Error ${res.status}: ${res.statusText}. Details: ${errText}`);
+      }
+
       const data = await res.json();
       const aiResponseText = data.solution || "Formulation error from educational server provider.";
       const aiMetadata = data.metadata || {};
@@ -417,9 +422,12 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
       } else {
         awardXP(firebaseUser?.uid || "local", "FOLLOW_UP_QUESTION");
       }
-    } catch (err) {
-      // console.error("Doubt processing error:", err);
-      alert("Error contacting Scholar API / database. Please try again.");
+    } catch (err: any) {
+      console.error("Scholar API Error:", err);
+      if (err.response) {
+        console.error("API Response:", err.response);
+      }
+      alert(`Error contacting Scholar API / database: ${err.message || String(err)}`);
     } finally {
       setLoading(false);
     }
@@ -855,7 +863,10 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
         })
       });
 
-      if (!res.ok) throw new Error("Chat request failed.");
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Chat request failed ${res.status}: ${res.statusText}. Details: ${errText}`);
+      }
 
       const data = await res.json();
       setDocChatHistory(prev => {
@@ -868,9 +879,10 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
         });
         return newHistory;
       });
-    } catch (err) {
+    } catch (err: any) {
+      console.error("Firebase Error: Document Chat processing failed", err);
       setDocChatHistory(prev => {
-        const newHistory = [...prev, { role: "assistant" as const, content: "Sorry, I could not process your question at the moment. Please ensure backend is running." }];
+        const newHistory = [...prev, { role: "assistant" as const, content: `Sorry, I could not process your question. Error: ${err.message}` }];
         setDocHistory(docs => {
           const updatedDocs = docs.map(d => d.id === activeDocHistoryId ? { ...d, chatHistory: newHistory } : d);
           localStorage.setItem("nova_doc_history", JSON.stringify(updatedDocs));
@@ -946,12 +958,18 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
           questionCount: quizQuestionsCount
         })
       });
+      
+      if (!res.ok) {
+        throw new Error(`Quiz Generation API Error ${res.status}: ${await res.text()}`);
+      }
+      
       const data = await res.json();
       setQuizQuestions(data.questions || []);
       setQuizStartTime(Date.now());
       setQuizEndTime(null);
-    } catch (err) {
-      alert("Quiz formulation failed.");
+    } catch (err: any) {
+      console.error("Firebase Error:", err);
+      alert(`Quiz formulation failed: ${err.message || String(err)}`);
     } finally {
       setLoading(false);
     }
@@ -1058,10 +1076,13 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
                     if (data.experience) setCareerExperience(typeof data.experience === 'string' ? data.experience : JSON.stringify(data.experience));
                     if (data.targetRole) setTargetRole(String(data.targetRole));
                 } else {
-                    // console.error("Parse failed", await response.text());
+                    const errText = await response.text();
+                    console.error("Firebase Error: Parse Resume failed", errText);
+                    alert(`Failed to parse resume: ${response.statusText}`);
                 }
-            } catch (err) {
-                // console.error("Parse request error:", err);
+            } catch (err: any) {
+                console.error("Firebase Error: Parse Resume request error:", err);
+                alert(`Error parsing resume: ${err.message}`);
             } finally {
                 setLoading(false);
             }
@@ -1086,12 +1107,13 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
             const data = await res.json();
             if (data.polished) setCareerExperience(data.polished);
         } else {
-            // console.error("Polish failed", await res.text());
-            alert("Failed to polish. Please try again.");
+            const errorText = await res.text();
+            console.error("Firebase Error: Polish failed", errorText);
+            alert(`Failed to polish. Please try again. ${res.statusText}`);
         }
-    } catch (e) {
-        // console.error(e);
-        alert("Failed to polish. Please try again.");
+    } catch (e: any) {
+        console.error("Firebase Error: Polish failed exception", e);
+        alert(`Failed to polish. Please try again. ${e.message || String(e)}`);
     } finally {
         setIsPolishing(false);
     }
@@ -1110,12 +1132,13 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
             const data = await res.json();
             if (data.polished) setCareerSkills(data.polished);
         } else {
-            // console.error("Polish failed", await res.text());
-            alert("Failed to polish. Please try again.");
+            const errorText = await res.text();
+            console.error("Firebase Error: Polish failed", errorText);
+            alert(`Failed to polish. Please try again. ${res.statusText}`);
         }
-    } catch (e) {
-        // console.error(e);
-        alert("Failed to polish. Please try again.");
+    } catch (e: any) {
+        console.error("Firebase Error: Polish failed exception", e);
+        alert(`Failed to polish. Please try again. ${e.message || String(e)}`);
     } finally {
         setIsPolishing(false);
     }
@@ -1161,9 +1184,13 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
           objective: careerObjective
         })
       });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Resume API Error ${res.status}: ${res.statusText}. Details: ${errText}`);
+      }
       const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.error || "Failed to generate resume");
+      if (data.error) {
+        throw new Error(data.error);
       }
       setResumeData(data);
       awardXP(firebaseUser?.uid || "local_user", "RESUME_CREATED");
@@ -1208,8 +1235,9 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
           behavior: 'smooth'
         });
       }, 100);
-    } catch (err) {
-      alert("Error generating resume.");
+    } catch (err: any) {
+      console.error("Firebase Error: Error generating resume", err);
+      alert(`Error generating resume: ${err.message || String(err)}`);
     } finally {
       setLoading(false);
     }
@@ -1246,9 +1274,9 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
       
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
       pdf.save(`${careerName.replace(/\s+/g, '_')}_Resume.pdf`);
-    } catch (e) {
-      // console.error(e);
-      alert("Error generating PDF.");
+    } catch (e: any) {
+      console.error("Firebase Error: Error generating PDF", e);
+      alert(`Error generating PDF: ${e.message || String(e)}`);
     } finally {
       setIsExporting(false);
     }

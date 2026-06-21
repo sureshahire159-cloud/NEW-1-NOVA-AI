@@ -141,7 +141,8 @@ export default function PlannerTab({ profile, setProfile, theme, firebaseUser }:
       });
 
       if (!response.ok) {
-        throw new Error("Backend server error while calling Gemini AI Strategy Model.");
+        const errText = await response.text();
+        throw new Error(`Strategy API Error ${response.status}: ${response.statusText}. Details: ${errText}`);
       }
 
       const data = await response.json();
@@ -189,8 +190,8 @@ export default function PlannerTab({ profile, setProfile, theme, firebaseUser }:
       } catch (err) {
       }
 
-    } catch (error) {
-      // console.error(error);
+    } catch (error: any) {
+      console.error("Firebase Error: Strategy formulation failed", error);
       alert(`Strategy formulation failed: ${error instanceof Error ? error.message : String(error)}. Please try again.`);
     } finally {
       setLoading(false);
@@ -345,9 +346,9 @@ export default function PlannerTab({ profile, setProfile, theme, firebaseUser }:
       
       pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
       pdf.save("Nova_AI_Study_Strategy.pdf");
-    } catch (e) {
-      // console.error("PDF generation failed:", e);
-      alert("Failed to export PDF format.");
+    } catch (e: any) {
+      console.error("Firebase Error: PDF generation failed:", e);
+      alert(`Failed to export PDF format: ${e.message || String(e)}`);
     } finally {
       setIsExporting(false);
     }

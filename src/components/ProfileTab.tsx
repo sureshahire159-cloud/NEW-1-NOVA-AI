@@ -108,7 +108,8 @@ export default function ProfileTab({ profile, setProfile, theme, setTheme, handl
       });
 
       if (!res.ok) {
-        throw new Error("API call error.");
+        const errText = await res.text();
+        throw new Error(`Profile API Error ${res.status}: ${res.statusText}. Details: ${errText}`);
       }
 
       const data = await res.json();
@@ -120,8 +121,9 @@ export default function ProfileTab({ profile, setProfile, theme, setTheme, handl
       awardXP(firebaseUser?.uid || "local_user", "RESUME_CREATED");
 
       alert("AI study persona slogan generated & updated on your dashboard summary!");
-    } catch (err) {
-      alert("AI identity generation failed.");
+    } catch (err: any) {
+      console.error("Firebase Error: AI identity generation failed", err);
+      alert(`AI identity generation failed: ${err.message || String(err)}`);
     } finally {
       setLoadingBio(false);
     }
