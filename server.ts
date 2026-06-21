@@ -927,6 +927,8 @@ Return a JSON containing:
 });
 
 // 11. Vite development / production handler integration
+export { app };
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     console.log("Integrating Vite Dev Middleware...");
@@ -944,10 +946,15 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Nova Scholar Workspace server listening on port ${PORT}`);
-    console.log(`Local test server link: http://localhost:${PORT}`);
-  });
+  // Only listen if not running in a serverless environment
+  if (!process.env.LAMBDA_TASK_ROOT && !process.env.NETLIFY) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Nova Scholar Workspace server listening on port ${PORT}`);
+      console.log(`Local test server link: http://localhost:${PORT}`);
+    });
+  }
 }
 
-startServer();
+if (!process.env.LAMBDA_TASK_ROOT && !process.env.NETLIFY) {
+  startServer();
+}
