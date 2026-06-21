@@ -7,6 +7,7 @@ import express from "express";
 import path from "path";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
+import cors from "cors";
 
 import { GoogleGenAI } from "@google/genai";
 
@@ -15,30 +16,48 @@ dotenv.config();
 let aiClient: GoogleGenAI | null = null;
 function getAI() {
   if (!aiClient) {
-    aiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "dummy_key_to_prevent_crash" });
+    if (!process.env.GEMINI_API_KEY) {
+       console.error("Critical: GEMINI_API_KEY is not defined in the environment.");
+    }
+    aiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "dummy_key" });
   }
   return aiClient;
 }
 
 const app = express();
+app.use(cors());
 app.use(express.json({ limit: "50mb" })); 
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
-// AI Studio user-agent telemetry header
-// Google Gemini SDK initialization removed because we use NVIDIA APIs
+function getNvidiaKey() {
+  const key = process.env.NVIDIA_API_KEY;
+  if (!key) {
+    throw new Error("NVIDIA_API_KEY is missing from environment variables.");
+  }
+  return key;
+}
 
-const NVIDIA_KEYS = [
-  "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",
-  "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",
-  "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",
-  "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",
-  "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"
-];
-
-export function getRandomNvidiaKey() {
-  if (process.env.NVIDIA_API_KEY) return process.env.NVIDIA_API_KEY;
-  return NVIDIA_KEYS[Math.floor(Math.random() * NVIDIA_KEYS.length)];
+async function fetchWithRetry(url: string, options: any, retries = 3, backoffMs = 1500) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 25000); // 25s timeout per request for Vercel margin
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(id);
+      
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      }
+      return response;
+    } catch (err: any) {
+      console.warn(`[Backend] Fetch failed (Attempt ${i + 1}/${retries}): ${err.message}`);
+      if (i === retries - 1) throw err;
+      await new Promise(res => setTimeout(res, backoffMs));
+      backoffMs *= 2; // Exponential backoff
+    }
+  }
+  throw new Error("API request failed after retries.");
 }
 
 function extractJSON(content: string) {
@@ -318,12 +337,12 @@ Focus purely on generating the correct text response. Do not comment on or attem
   messages.push({ role: "user", content: query });
 
   let responseText = "";
-  const NVIDIA_KEY = getRandomNvidiaKey();
+  const NVIDIA_KEY = getNvidiaKey();
 
   try {
     const aiModel = "meta/llama-3.1-8b-instruct";
     console.log(`[Backend] Utilizing NVIDIA ${aiModel} for doubt solving. Complexity: ${questionComplexity}`);
-    const nvidiaResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+    const nvidiaResponse = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -336,10 +355,6 @@ Focus purely on generating the correct text response. Do not comment on or attem
         max_tokens: questionComplexity === "Simple" ? 128 : 2048
       })
     });
-
-    if (!nvidiaResponse.ok) {
-        throw new Error(`NVIDIA API Error: ${nvidiaResponse.statusText}`);
-    }
 
     const data = await nvidiaResponse.json();
     responseText = data.choices[0]?.message?.content || "I was unable to answer the question.";
@@ -384,8 +399,8 @@ app.post("/api/generate-chat-title", async (req, res) => {
 Doubt: "${query}"
 Return ONLY raw title, no quotes, no extra chat text, no numbers.`;
 
-      const NVIDIA_KEY = getRandomNvidiaKey();
-      const nvidiaResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+      const NVIDIA_KEY = getNvidiaKey();
+      const nvidiaResponse = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -398,12 +413,8 @@ Return ONLY raw title, no quotes, no extra chat text, no numbers.`;
           max_tokens: 30
         })
       });
-      if(nvidiaResponse.ok) {
-         const data = await nvidiaResponse.json();
-         title = data.choices[0]?.message?.content?.trim() || "New Doubt Chat";
-      } else {
-         title = "New Doubt Chat";
-      }
+      const data = await nvidiaResponse.json();
+      title = data.choices[0]?.message?.content?.trim() || "New Doubt Chat";
     } catch (e) {
       title = query.split(" ").slice(0, 3).join(" ") || "New Doubt Chat";
     }
@@ -419,8 +430,8 @@ app.post("/api/synthesize", async (req, res) => {
     const { documentName, fileBase64, mimeType, textContent } = req.body;
     
     // As requested: NVIDIA API details logged and available
-    const NVIDIA_LLAMA_KEY = getRandomNvidiaKey();
-    const NVIDIA_MIXTRAL_KEY = getRandomNvidiaKey();
+    const NVIDIA_LLAMA_KEY = getNvidiaKey();
+    const NVIDIA_MIXTRAL_KEY = getNvidiaKey();
     console.log(`[Backend Info] Environment configured with NVIDIA API Keys for llama-3.3-70b-instruct and mixtral-8x7b-instruct-v0.1 for high-performance processing capabilities.`);
 
     const prompt = `You are "EduPulse AI"—an advanced, highly intelligent AI Tutor and Document Synthesizer for a student study website. You are analyzing a document: "${documentName}".
@@ -544,7 +555,7 @@ app.post("/api/doc-chat", async (req, res) => {
   try {
     const { documentContent, history, query } = req.body;
     
-    const NVIDIA_LLAMA_KEY = getRandomNvidiaKey();
+    const NVIDIA_LLAMA_KEY = getNvidiaKey();
 
     const systemPrompt = `You are "EduPulse AI"—an advanced, highly intelligent AI Tutor and Document Synthesizer for a student study website.
 CRITICAL INSTRUCTIONS:
@@ -564,7 +575,7 @@ ${documentContent}`;
       { role: "user", content: query }
     ];
 
-    const nvidiaResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+    const nvidiaResponse = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -577,10 +588,6 @@ ${documentContent}`;
         max_tokens: 1024
       })
     });
-
-    if (!nvidiaResponse.ok) {
-      throw new Error(`NVIDIA API Error: ${nvidiaResponse.statusText}`);
-    }
 
     const data = await nvidiaResponse.json();
     const replyText = data.choices[0]?.message?.content || "I was unable to formulate an answer.";
@@ -608,7 +615,7 @@ app.post("/api/generate-quiz", async (req, res) => {
         return res.status(400).json({ error: "Education Level, Subject Category, and Specific Topic are required." });
     }
 
-    const NVIDIA_KEY = getRandomNvidiaKey();
+    const NVIDIA_KEY = getNvidiaKey();
 
     const prompt = `Generate exactly ${count} multiple choice questions (MCQs) for a quiz.
 Education Level: ${educationLevel}
@@ -626,7 +633,7 @@ The JSON must be an array of question objects where each object has exactly thes
 
 Ensure the questions perfectly match the given topic, subject, level, and difficulty accurately. Randomize the correct option index across questions. Avoid duplicates. Avoid markdown output formatting, JUST JSON ARRAY:`;
 
-    const nvidiaResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+    const nvidiaResponse = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -639,10 +646,6 @@ Ensure the questions perfectly match the given topic, subject, level, and diffic
         max_tokens: 3000
       })
     });
-
-    if (!nvidiaResponse.ok) {
-        throw new Error(`NVIDIA API Error: ${nvidiaResponse.statusText}`);
-    }
 
     const data = await nvidiaResponse.json();
     let text = data.choices[0]?.message?.content || "[]";
@@ -716,50 +719,33 @@ Schema Representation:
   "languages": ["English (Fluent)"]
 }`;
 
-    const NVIDIA_KEY = getRandomNvidiaKey();
-    let retries = 3;
-    let backoffMs = 1500;
-    while(retries > 0) {
-      try {
-        const fetchRes = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${NVIDIA_KEY}`
-          },
-          body: JSON.stringify({
-            model: "meta/llama-3.1-8b-instruct",
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.1,
-            max_tokens: 3000
-          })
-        });
+    const NVIDIA_KEY = getNvidiaKey();
+    
+    const fetchRes = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${NVIDIA_KEY}`
+      },
+      body: JSON.stringify({
+        model: "meta/llama-3.1-8b-instruct",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.1,
+        max_tokens: 3000
+      })
+    });
 
-        if (!fetchRes.ok) {
-           throw new Error("Failed");
-        }
-        
-        const data = await fetchRes.json();
-        const content = data.choices[0]?.message?.content || "{}";
-        
-        let output = {};
-        try {
-            output = extractJSON(content);
-        } catch(e) {
-            console.error("Resume generator parsing failed", content);
-        }
-        res.json(output);
-        return;
-
-      } catch (err: any) {
-        retries--;
-        if (retries === 0) {
-          throw err;
-        }
-        await new Promise(r => setTimeout(r, backoffMs));
-        backoffMs *= 2;
-      }
+    const data = await fetchRes.json();
+    const content = data.choices[0]?.message?.content || "{}";
+    
+    let output = {};
+    try {
+        output = extractJSON(content);
+    } catch(e) {
+        console.error("Resume generator parsing failed", content);
     }
+    res.json(output);
+
   } catch (error) {
     console.error("Career Resume error:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Resume generation failed." });
@@ -807,50 +793,31 @@ Return ONLY valid JSON format.`;
 
     const finalPrompt = `${prompt}\n\nResume Text:\n${inputData}`;
 
-    const NVIDIA_KEY = getRandomNvidiaKey();
-    let textResponse;
-    let retries = 3;
-    let backoffMs = 1500;
-    while(retries > 0) {
-      try {
-        const fetchRes = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${NVIDIA_KEY}`
-          },
-          body: JSON.stringify({
-            model: "meta/llama-3.1-8b-instruct",
-            messages: [{ role: "user", content: finalPrompt }],
-            temperature: 0.1,
-            max_tokens: 2048
-          })
-        });
-
-        if (!fetchRes.ok) {
-           throw new Error("Failed");
-        }
-        
-        const data = await fetchRes.json();
-        const content = data.choices[0]?.message?.content || "{}";
-        
-        let output = {};
-        try {
-            output = extractJSON(content);
-        } catch (e) {
-            console.error("JSON parse failed, model returned:", content);
-        }
-        return res.json(output);
-
-      } catch (err: any) {
-        retries--;
-        if (retries === 0) {
-          throw err;
-        }
-        await new Promise(r => setTimeout(r, backoffMs));
-        backoffMs *= 2;
-      }
+    const NVIDIA_KEY = getNvidiaKey();
+    const fetchRes = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${NVIDIA_KEY}`
+      },
+      body: JSON.stringify({
+        model: "meta/llama-3.1-8b-instruct",
+        messages: [{ role: "user", content: finalPrompt }],
+        temperature: 0.1,
+        max_tokens: 2048
+      })
+    });
+    
+    const data = await fetchRes.json();
+    const content = data.choices[0]?.message?.content || "{}";
+    
+    let output = {};
+    try {
+        output = extractJSON(content);
+    } catch (e) {
+        console.error("JSON parse failed, model returned:", content);
     }
+    return res.json(output);
   } catch (error) {
     console.error("Parse Error:", error);
     res.status(500).json({ error: "Failed to parse document" });
@@ -870,45 +837,27 @@ app.post("/api/polish-resume", async (req, res) => {
 
     const prompt = `${instruction}\n\nInput Text:\n${text}`;
 
-    const NVIDIA_KEY = getRandomNvidiaKey();
-    let retries = 3;
-    let backoffMs = 1500;
-    while(retries > 0) {
-      try {
-        const fetchRes = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${NVIDIA_KEY}`
-          },
-          body: JSON.stringify({
-            model: "meta/llama-3.1-8b-instruct",
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.1,
-            max_tokens: 1024
-          })
-        });
+    const NVIDIA_KEY = getNvidiaKey();
+    const fetchRes = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${NVIDIA_KEY}`
+      },
+      body: JSON.stringify({
+        model: "meta/llama-3.1-8b-instruct",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.1,
+        max_tokens: 1024
+      })
+    });
 
-        if (!fetchRes.ok) {
-           throw new Error("Failed");
-        }
-        const data = await fetchRes.json();
-        const content = data.choices[0]?.message?.content || "";
-        
-        let dataText = content;
-        dataText = dataText.replace(/^```((?:\w+)?)\n?/i, '').replace(/```$/i, '').trim();
-        res.json({ polished: dataText });
-        return;
-
-      } catch (err: any) {
-        retries--;
-        if (retries === 0) {
-          throw err;
-        }
-        await new Promise(r => setTimeout(r, backoffMs));
-        backoffMs *= 2;
-      }
-    }
+    const data = await fetchRes.json();
+    const content = data.choices[0]?.message?.content || "";
+    
+    let dataText = content;
+    dataText = dataText.replace(/^```((?:\w+)?)\n?/i, '').replace(/```$/i, '').trim();
+    res.json({ polished: dataText });
   } catch (error) {
     console.error("Resume Polish error:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Polish failed." });
@@ -933,50 +882,31 @@ Return a JSON containing:
 2. motivationQuote: Custom neural spark motivational wisdom message customized for them (no more than 30 words).
 3. levelTitle: A custom fun title badge (e.g. "Board Champion", "Quantum Scholar", "Cognitive Voyager").`;
 
-    const NVIDIA_KEY = getRandomNvidiaKey();
-    let retries = 3;
-    let backoffMs = 1500;
-    while(retries > 0) {
-      try {
-        const fetchRes = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${NVIDIA_KEY}`
-          },
-          body: JSON.stringify({
-            model: "meta/llama-3.1-8b-instruct",
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.2,
-            max_tokens: 500
-          })
-        });
-
-        if (!fetchRes.ok) {
-           throw new Error("Failed");
-        }
-        
-        const data = await fetchRes.json();
-        const content = data.choices[0]?.message?.content || "{}";
-        
-        let output = {};
-        try {
-            output = extractJSON(content);
-        } catch(e) {
-            console.error("auto bio parsing failed", content);
-        }
-        res.json(output);
-        return;
-
-      } catch (err: any) {
-        retries--;
-        if (retries === 0) {
-          throw err;
-        }
-        await new Promise(r => setTimeout(r, backoffMs));
-        backoffMs *= 2;
-      }
+    const NVIDIA_KEY = getNvidiaKey();
+    const fetchRes = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${NVIDIA_KEY}`
+      },
+      body: JSON.stringify({
+        model: "meta/llama-3.1-8b-instruct",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.2,
+        max_tokens: 500
+      })
+    });
+    
+    const data = await fetchRes.json();
+    const content = data.choices[0]?.message?.content || "{}";
+    
+    let output = {};
+    try {
+        output = extractJSON(content);
+    } catch(e) {
+        console.error("auto bio parsing failed", content);
     }
+    res.json(output);
   } catch (error) {
     console.error("Bio generator error:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Bio generation failed." });

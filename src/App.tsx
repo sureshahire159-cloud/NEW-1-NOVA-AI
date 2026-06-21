@@ -340,90 +340,119 @@ export default function App() {
 
       {/* AUTH MODAL OVERLAY */}
       {!firebaseUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
           <div className={`w-full max-w-md p-8 rounded-3xl border shadow-2xl relative ${isCrimson ? "bg-[#080202] border-red-500/20" : "bg-[#030612] border-blue-500/20"}`}>
-            <div className="flex flex-col items-center mb-6">
-              <NeonBrainLogo isCrimson={isCrimson} className="w-16 h-16 rounded-2xl mb-4" />
-              <h2 className="text-2xl font-black tracking-tight">{isSignUp ? "Create Account" : "Welcome Back"}</h2>
-              <p className="text-sm text-white/50 mt-1 text-center">Sync your progress and connect with workspace tools.</p>
+            
+            <div className="flex justify-center mb-6">
+              <NeonBrainLogo isCrimson={isCrimson} className="w-12 h-12 rounded-2xl" />
+            </div>
+
+            {/* SEGMENTED CONTROL */}
+            <div className={`flex w-full mb-8 rounded-2xl p-1 ${isCrimson ? "bg-red-950/20" : "bg-blue-950/20"} border border-white/5`}>
+              <button 
+                onClick={() => { setIsSignUp(false); setAuthError(""); }}
+                className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all duration-300 ${!isSignUp ? (isCrimson ? "bg-red-600 text-white shadow-md shadow-red-900/50" : "bg-blue-600 text-white shadow-md shadow-blue-900/50") : "text-white/50 hover:text-white"}`}
+              >
+                Login
+              </button>
+              <button 
+                onClick={() => { setIsSignUp(true); setAuthError(""); }}
+                className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all duration-300 ${isSignUp ? (isCrimson ? "bg-red-600 text-white shadow-md shadow-red-900/50" : "bg-blue-600 text-white shadow-md shadow-blue-900/50") : "text-white/50 hover:text-white"}`}
+              >
+                Signup
+              </button>
             </div>
 
             {authError && (
-              <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm text-center">
+              <div className="mb-6 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm text-center">
                 {authError}
               </div>
             )}
 
-            <form onSubmit={handleAuthSubmit} className="space-y-4">
+            <form onSubmit={handleAuthSubmit} className="space-y-5">
               {isSignUp && (
                 <div>
-                  <label className="text-xs font-medium text-white/50 uppercase tracking-widest pl-1 mb-1 block">Full Name</label>
                   <input
                     type="text"
                     required={isSignUp}
                     value={authName}
                     onChange={e => setAuthName(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-white/30 transition-colors"
-                    placeholder="E.g. Alex"
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-white placeholder:text-white/40 focus:outline-none focus:border-white/30 transition-colors"
+                    placeholder="Full Name"
                   />
                 </div>
               )}
               <div>
-                <label className="text-xs font-medium text-white/50 uppercase tracking-widest pl-1 mb-1 block">Email</label>
                 <input
                   type="email"
                   required
                   value={authEmail}
                   onChange={e => setAuthEmail(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-white/30 transition-colors"
-                  placeholder="name@example.com"
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-white placeholder:text-white/40 focus:outline-none focus:border-white/30 transition-colors"
+                  placeholder="Email Address"
                 />
               </div>
-              <div>
-                <label className="text-xs font-medium text-white/50 uppercase tracking-widest pl-1 mb-1 block">Password</label>
+              <div className="space-y-3">
                 <input
                   type="password"
                   required
                   value={authPassword}
                   onChange={e => setAuthPassword(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-white/30 transition-colors"
-                  placeholder="••••••••"
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-white placeholder:text-white/40 focus:outline-none focus:border-white/30 transition-colors"
+                  placeholder="Password"
                 />
+                
+                {!isSignUp && (
+                  <div className="flex justify-start px-2">
+                    <button type="button" className={`text-sm font-medium ${isCrimson ? "text-red-400 hover:text-red-300" : "text-blue-400 hover:text-blue-300"} transition-colors`}>
+                      Forgot password?
+                    </button>
+                  </div>
+                )}
               </div>
 
               <button
                 type="submit"
                 disabled={actionLoading}
-                className={`w-full flex items-center justify-center gap-2 py-3 mt-4 rounded-xl font-bold bg-white text-black hover:bg-white/90 transition-all ${actionLoading ? "opacity-50 cursor-not-allowed" : ""}`}
+                className={`w-full flex items-center justify-center gap-2 py-4 mt-2 rounded-2xl font-bold transition-all shadow-lg ${isCrimson ? "bg-red-600 hover:bg-red-500 text-white" : "bg-blue-600 hover:bg-blue-500 text-white"} ${actionLoading ? "opacity-50 cursor-not-allowed" : ""}`}
               >
                 {actionLoading && <Loader2 className="w-5 h-5 animate-spin" />}
-                {isSignUp ? "Sign Up" : "Sign In"}
+                {isSignUp ? "Signup" : "Login"}
               </button>
             </form>
 
-            <div className="relative my-6">
+            <div className="relative my-8">
               <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/10"></div></div>
-              <div className="relative flex justify-center text-sm"><span className={`px-2 text-white/50 ${isCrimson ? "bg-[#080202]" : "bg-[#030612]"}`}>Or continue with</span></div>
+              <div className="relative flex justify-center text-sm"><span className={`px-4 text-white/50 ${isCrimson ? "bg-[#080202]" : "bg-[#030612]"}`}>Or continue with</span></div>
             </div>
 
             <button
               onClick={handleGoogleSignIn}
               disabled={actionLoading}
-              className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold border border-white/10 bg-white/5 text-white hover:bg-white/10 transition-all ${actionLoading ? "opacity-50 cursor-not-allowed" : ""}`}
+              className={`w-full flex items-center justify-center gap-3 py-4 rounded-2xl font-bold border border-white/10 bg-white/5 text-white hover:bg-white/10 transition-all ${actionLoading ? "opacity-50 cursor-not-allowed" : ""}`}
             >
-              Sign in with Google
+              <svg className="w-5 h-5" viewBox="0 0 24 24">
+                <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+              </svg>
+              Google
             </button>
 
-            <div className="mt-6 text-center text-sm text-white/50">
-              {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
+            <div className="mt-8 text-center text-sm">
+              <span className="text-white/50">
+                {isSignUp ? "Already have an account?" : "Create an account"}{" "}
+              </span>
               <button 
                 type="button" 
-                onClick={() => setIsSignUp(!isSignUp)}
-                className={`font-semibold hover:underline ${isCrimson ? "text-red-400" : "text-blue-400"}`}
+                onClick={() => { setIsSignUp(!isSignUp); setAuthError(""); }}
+                className={`font-semibold hover:underline transition-colors ${isCrimson ? "text-red-400" : "text-blue-400"}`}
               >
-                {isSignUp ? "Sign In" : "Sign Up"}
+                {isSignUp ? "Login now" : "Signup now"}
               </button>
             </div>
+
           </div>
         </div>
       )}
