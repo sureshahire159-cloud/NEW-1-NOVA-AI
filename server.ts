@@ -28,6 +28,19 @@ const PORT = 3000;
 // AI Studio user-agent telemetry header
 // Google Gemini SDK initialization removed because we use NVIDIA APIs
 
+const NVIDIA_KEYS = [
+  "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",
+  "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",
+  "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",
+  "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",
+  "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"
+];
+
+export function getRandomNvidiaKey() {
+  if (process.env.NVIDIA_API_KEY) return process.env.NVIDIA_API_KEY;
+  return NVIDIA_KEYS[Math.floor(Math.random() * NVIDIA_KEYS.length)];
+}
+
 function extractJSON(content: string) {
     try {
         let text = content.trim();
@@ -305,7 +318,7 @@ Focus purely on generating the correct text response. Do not comment on or attem
   messages.push({ role: "user", content: query });
 
   let responseText = "";
-  const NVIDIA_KEY = process.env.NVIDIA_API_KEY || "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";
+  const NVIDIA_KEY = getRandomNvidiaKey();
 
   try {
     const aiModel = "meta/llama-3.1-8b-instruct";
@@ -371,7 +384,7 @@ app.post("/api/generate-chat-title", async (req, res) => {
 Doubt: "${query}"
 Return ONLY raw title, no quotes, no extra chat text, no numbers.`;
 
-      const NVIDIA_KEY = process.env.NVIDIA_API_KEY || "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";
+      const NVIDIA_KEY = getRandomNvidiaKey();
       const nvidiaResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -406,8 +419,8 @@ app.post("/api/synthesize", async (req, res) => {
     const { documentName, fileBase64, mimeType, textContent } = req.body;
     
     // As requested: NVIDIA API details logged and available
-    const NVIDIA_LLAMA_KEY = process.env.NVIDIA_API_KEY || "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";
-    const NVIDIA_MIXTRAL_KEY = process.env.NVIDIA_API_KEY || "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";
+    const NVIDIA_LLAMA_KEY = getRandomNvidiaKey();
+    const NVIDIA_MIXTRAL_KEY = getRandomNvidiaKey();
     console.log(`[Backend Info] Environment configured with NVIDIA API Keys for llama-3.3-70b-instruct and mixtral-8x7b-instruct-v0.1 for high-performance processing capabilities.`);
 
     const prompt = `You are "EduPulse AI"—an advanced, highly intelligent AI Tutor and Document Synthesizer for a student study website. You are analyzing a document: "${documentName}".
@@ -531,7 +544,7 @@ app.post("/api/doc-chat", async (req, res) => {
   try {
     const { documentContent, history, query } = req.body;
     
-    const NVIDIA_LLAMA_KEY = process.env.NVIDIA_API_KEY || "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";
+    const NVIDIA_LLAMA_KEY = getRandomNvidiaKey();
 
     const systemPrompt = `You are "EduPulse AI"—an advanced, highly intelligent AI Tutor and Document Synthesizer for a student study website.
 CRITICAL INSTRUCTIONS:
@@ -595,7 +608,7 @@ app.post("/api/generate-quiz", async (req, res) => {
         return res.status(400).json({ error: "Education Level, Subject Category, and Specific Topic are required." });
     }
 
-    const NVIDIA_KEY = process.env.NVIDIA_API_KEY || "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";
+    const NVIDIA_KEY = getRandomNvidiaKey();
 
     const prompt = `Generate exactly ${count} multiple choice questions (MCQs) for a quiz.
 Education Level: ${educationLevel}
@@ -703,7 +716,7 @@ Schema Representation:
   "languages": ["English (Fluent)"]
 }`;
 
-    const NVIDIA_KEY = process.env.NVIDIA_API_KEY || "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";
+    const NVIDIA_KEY = getRandomNvidiaKey();
     let retries = 3;
     let backoffMs = 1500;
     while(retries > 0) {
@@ -794,7 +807,7 @@ Return ONLY valid JSON format.`;
 
     const finalPrompt = `${prompt}\n\nResume Text:\n${inputData}`;
 
-    const NVIDIA_KEY = process.env.NVIDIA_API_KEY || "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";
+    const NVIDIA_KEY = getRandomNvidiaKey();
     let textResponse;
     let retries = 3;
     let backoffMs = 1500;
@@ -857,7 +870,7 @@ app.post("/api/polish-resume", async (req, res) => {
 
     const prompt = `${instruction}\n\nInput Text:\n${text}`;
 
-    const NVIDIA_KEY = process.env.NVIDIA_API_KEY || "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";
+    const NVIDIA_KEY = getRandomNvidiaKey();
     let retries = 3;
     let backoffMs = 1500;
     while(retries > 0) {
@@ -920,7 +933,7 @@ Return a JSON containing:
 2. motivationQuote: Custom neural spark motivational wisdom message customized for them (no more than 30 words).
 3. levelTitle: A custom fun title badge (e.g. "Board Champion", "Quantum Scholar", "Cognitive Voyager").`;
 
-    const NVIDIA_KEY = process.env.NVIDIA_API_KEY || "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";
+    const NVIDIA_KEY = getRandomNvidiaKey();
     let retries = 3;
     let backoffMs = 1500;
     while(retries > 0) {
@@ -992,7 +1005,7 @@ async function startServer() {
   }
 
   // Only listen if not running in a serverless environment
-  if (!process.env.LAMBDA_TASK_ROOT && !process.env.NETLIFY) {
+  if (!process.env.LAMBDA_TASK_ROOT && !process.env.NETLIFY && !process.env.VERCEL) {
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`Nova Scholar Workspace server listening on port ${PORT}`);
       console.log(`Local test server link: http://localhost:${PORT}`);
@@ -1000,6 +1013,6 @@ async function startServer() {
   }
 }
 
-if (!process.env.LAMBDA_TASK_ROOT && !process.env.NETLIFY) {
+if (!process.env.LAMBDA_TASK_ROOT && !process.env.NETLIFY && !process.env.VERCEL) {
   startServer();
 }
