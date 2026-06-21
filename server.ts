@@ -12,7 +12,13 @@ import { GoogleGenAI } from "@google/genai";
 
 dotenv.config();
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+let aiClient: GoogleGenAI | null = null;
+function getAI() {
+  if (!aiClient) {
+    aiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "dummy_key_to_prevent_crash" });
+  }
+  return aiClient;
+}
 
 const app = express();
 app.use(express.json({ limit: "50mb" })); 
@@ -225,7 +231,7 @@ The JSON must contain exactly:
   "examRoadmap": ["Phase 1: ...", "Phase 2: ...", "Phase 3: ...", "Phase 4: ...", "Phase 5: ..."]
 }`;
 
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt,
       config: {
@@ -302,7 +308,7 @@ Focus purely on generating the correct text response. Do not comment on or attem
   const NVIDIA_KEY = process.env.NVIDIA_API_KEY || "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";
 
   try {
-    const aiModel = questionComplexity === "Simple" ? "meta/llama-3.1-8b-instruct" : "meta/llama-3.3-70b-instruct";
+    const aiModel = "meta/llama-3.1-8b-instruct";
     console.log(`[Backend] Utilizing NVIDIA ${aiModel} for doubt solving. Complexity: ${questionComplexity}`);
     const nvidiaResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
       method: "POST",
@@ -442,8 +448,30 @@ app.post("/api/synthesize", async (req, res) => {
       "Connection": "keep-alive"
     });
 
-    // Only text uploads allowed
-    console.log("[Backend] Utilizing NVIDIA meta/llama-3.3-70b-instruct for text-only synthesis.");
+    if (isMultimodal) {
+        console.log("[Backend] Utilizing Gemini 2.5 Flash for multimodal/PDF synthesis.");
+        const aiModel = getAI().models;
+        const fileData = {
+           inlineData: { data: fileBase64, mimeType: mimeType }
+        };
+        const responseText = await aiModel.generateContentStream({
+            model: "gemini-2.5-flash",
+            contents: [fileData, prompt],
+            config: { temperature: 0.2 }
+        });
+        
+        for await (const chunk of responseText) {
+             const chunkText = chunk.text;
+             if (chunkText) {
+                 res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
+             }
+        }
+        res.end();
+        return;
+    }
+
+    // Only text uploads allowed for NVIDIA
+    console.log("[Backend] Utilizing NVIDIA meta/llama-3.1-8b-instruct for fast text synthesis.");
     
     // We expect the extracted text to be sent from the frontend if they are using mammoth etc
     // Or plain text files
@@ -456,7 +484,7 @@ app.post("/api/synthesize", async (req, res) => {
         "Authorization": `Bearer ${NVIDIA_LLAMA_KEY}`
       },
       body: JSON.stringify({
-        model: "meta/llama-3.3-70b-instruct",
+        model: "meta/llama-3.1-8b-instruct",
         messages: [{role: "user", content: combinedText}],
         temperature: 0.2,
         max_tokens: 3000,
@@ -530,7 +558,7 @@ ${documentContent}`;
         "Authorization": `Bearer ${NVIDIA_LLAMA_KEY}`
       },
       body: JSON.stringify({
-        model: "meta/llama-3.3-70b-instruct",
+        model: "meta/llama-3.1-8b-instruct",
         messages: messages,
         temperature: 0.2,
         max_tokens: 1024
@@ -592,7 +620,7 @@ Ensure the questions perfectly match the given topic, subject, level, and diffic
         "Authorization": `Bearer ${NVIDIA_KEY}`
       },
       body: JSON.stringify({
-        model: "meta/llama-3.3-70b-instruct",
+        model: "meta/llama-3.1-8b-instruct",
         messages: [{ role: "user", content: prompt }],
         temperature: 0.3,
         max_tokens: 3000
@@ -731,23 +759,40 @@ app.post("/api/parse-resume", async (req, res) => {
     const { textContent, fileBase64, mimeType } = req.body;
     let inputData = textContent || "";
 
+    const prompt = `Act as an expert Resume Parser. Parse the following text into the structured format. 
+If a field is missing, leave it empty.
+Return ONLY valid JSON format.`;
+
     if (fileBase64 && mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
         const buffer = Buffer.from(fileBase64, "base64");
         const result = await mammoth.extractRawText({ buffer });
         inputData += "\n" + result.value;
     } else if (fileBase64 && (mimeType.startsWith("image/") || mimeType === "application/pdf" || mimeType.startsWith("application/"))) {
-        // We will just process any available `textContent`. 
-        // We removed Gemini vision fallback entirely to prevent quota issues.
-        // If there's textContent passed (e.g., from PDF.js), we use that.
-        // Otherwise inputData remains empty.
+        console.log("Using Gemini 1.5/2.5 for vision/PDF resume parsing");
+        try {
+            const aiModel = getAI().models;
+            const fileData = {
+                 inlineData: {
+                     data: fileBase64,
+                     mimeType: mimeType
+                 }
+            };
+            const response = await aiModel.generateContent({
+                 model: "gemini-2.5-flash",
+                 contents: [fileData, prompt],
+                 config: {
+                    responseMimeType: "application/json",
+                    temperature: 0.1
+                 }
+            });
+            const text = response.text || "{}";
+            return res.json(extractJSON(text));
+        } catch(err) {
+            console.error("Gemini fallback failed", err);
+        }
     }
 
-    const prompt = `Act as an expert Resume Parser. Parse the following text into the structured format. 
-If a field is missing, leave it empty.
-Return ONLY valid JSON format.
-
-Resume Text:
-${inputData}`;
+    const finalPrompt = `${prompt}\n\nResume Text:\n${inputData}`;
 
     const NVIDIA_KEY = process.env.NVIDIA_API_KEY || "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";
     let textResponse;
@@ -762,8 +807,8 @@ ${inputData}`;
             "Authorization": `Bearer ${NVIDIA_KEY}`
           },
           body: JSON.stringify({
-            model: "meta/llama-3.3-70b-instruct",
-            messages: [{ role: "user", content: prompt }],
+            model: "meta/llama-3.1-8b-instruct",
+            messages: [{ role: "user", content: finalPrompt }],
             temperature: 0.1,
             max_tokens: 2048
           })
