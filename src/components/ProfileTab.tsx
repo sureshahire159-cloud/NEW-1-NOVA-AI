@@ -117,7 +117,7 @@ export default function ProfileTab({ profile, setProfile, theme, setTheme, handl
         ...p,
         bio: data.bio ? `${data.bio} | Motto: ${data.motivationQuote}` : p.bio
       }));
-      if (firebaseUser) awardXP(firebaseUser.uid, "RESUME_CREATED");
+      awardXP(firebaseUser?.uid || "local_user", "RESUME_CREATED");
 
       alert("AI study persona slogan generated & updated on your dashboard summary!");
     } catch (err) {

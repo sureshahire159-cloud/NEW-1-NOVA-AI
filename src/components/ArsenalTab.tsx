@@ -413,9 +413,9 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
         } catch (titleErr) {
           console.warn("Title creation warning:", titleErr);
         }
-        awardXP(firebaseUser?.uid, "ASK_QUESTION");
+        awardXP(firebaseUser?.uid || "local", "ASK_QUESTION");
       } else {
-        awardXP(firebaseUser?.uid, "FOLLOW_UP_QUESTION");
+        awardXP(firebaseUser?.uid || "local", "FOLLOW_UP_QUESTION");
       }
     } catch (err) {
       // console.error("Doubt processing error:", err);
@@ -769,7 +769,7 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
       setTimeout(() => {
         setDocAnalysisStatus("");
       }, 2000);
-      awardXP(firebaseUser?.uid, "GENERATE_SUMMARY");
+      awardXP(firebaseUser?.uid || "local_user", "GENERATE_SUMMARY");
     } catch (err: any) {
       setDocError(err.message || "Extraction failed. Please check your document.");
       setDocAnalysisStatus("");
@@ -968,7 +968,7 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
     setQuizEndTime(Date.now());
     // Reward XP!
     const award = score * 30; // 30 XP per correct MCQ
-    awardXP(firebaseUser?.uid, "COMPLETE_QUIZ");
+    awardXP(firebaseUser?.uid || "local_user", "COMPLETE_QUIZ");
     
     setQuizHistory(prev => {
       const newHistory = [{
@@ -1166,7 +1166,7 @@ export default function ArsenalTab({ profile, setProfile, theme, firebaseUser }:
         throw new Error(data.error || "Failed to generate resume");
       }
       setResumeData(data);
-      awardXP(firebaseUser?.uid, "RESUME_CREATED");
+      awardXP(firebaseUser?.uid || "local_user", "RESUME_CREATED");
       
       const newHistoryItem = {
         id: Date.now().toString(),

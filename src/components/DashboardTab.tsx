@@ -93,9 +93,7 @@ export default function DashboardTab({
             setTimerRunning(false);
             // Reward study XP when focus completes
             if (timerMode === "focus") {
-              if (firebaseUser) {
-                awardXP(firebaseUser.uid, "FOCUS_SESSION_COMPLETED");
-              }
+              awardXP(firebaseUser?.uid || "local_user", "FOCUS_SESSION_COMPLETED");
               alert(
                 `Fantastic lock-in! You completed your Focus block and earned XP!`,
               );
@@ -137,7 +135,7 @@ export default function DashboardTab({
 
     // Reward XP on task completion
     if (!currentlyCompleted) {
-      if (firebaseUser) awardXP(firebaseUser.uid, "COMPLETE_DAILY_GOAL"); 
+      awardXP(firebaseUser?.uid || "local_user", "COMPLETE_DAILY_GOAL"); 
     }
   };
 

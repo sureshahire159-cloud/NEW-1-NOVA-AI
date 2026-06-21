@@ -10,17 +10,6 @@ import {
   UserAcademicProfile,
   WorkspaceTheme,
 } from "./types";
-import { auth, db } from "./lib/firebase";
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  GoogleAuthProvider,
-  signInWithPopup,
-} from "firebase/auth";
-import { doc, setDoc, getDoc, onSnapshot } from "firebase/firestore";
-import { checkDailyStreak } from "./lib/xpSystem";
 
 // Import Custom Modular Tab Components
 import BottomNav from "./components/BottomNav";
@@ -42,6 +31,17 @@ import {
   EyeOff,
   ArrowUp,
 } from "lucide-react";
+
+// Import Firebase
+import { auth, db, googleProvider } from "./lib/firebase";
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged,
+} from "firebase/auth";
+import { doc, setDoc, getDoc, onSnapshot } from "firebase/firestore";
 
 export function NeonBrainLogo({ isCrimson, className = "w-8 h-8 rounded-[10px]" }: { isCrimson: boolean, className?: string }) {
   return (
@@ -85,23 +85,9 @@ export default function App() {
     localStorage.setItem("nova_theme", newTheme);
   };
 
-
-  // Authentication and Profile States
-  const [firebaseUser, setFirebaseUser] = useState<any | null>(null);
-  const [authLoading, setAuthLoading] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
-
-  // Authentication Fields (Login / Sign Up)
-  const [authName, setAuthName] = useState("");
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [isSignUp, setIsSignUp] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
-
   const defaultProfile: UserAcademicProfile = {
-    fullName: "",
-    email: "", // Mapped user email context
+    fullName: "Student Explorer",
+    email: "", 
     phoneNumber: "",
     location: "",
     academicLevel: "" as any,
@@ -131,6 +117,12 @@ export default function App() {
   };
 
   const loadProfile = (): UserAcademicProfile => {
+    try {
+      const storedProfile = localStorage.getItem("nova_profile");
+      if (storedProfile) {
+        return JSON.parse(storedProfile);
+      }
+    } catch(e) {}
     return defaultProfile;
   };
 
@@ -141,99 +133,70 @@ export default function App() {
   > = (action) => {
     setProfileState((prev) => {
       const nextState = typeof action === "function" ? action(prev) : action;
+      localStorage.setItem("nova_profile", JSON.stringify(nextState));
+      
+      // Auto-sync to Firebase if logged in
       if (firebaseUser) {
-        // Exclude XP logic from standard profile updates since XP handles it server-side transactionally
-        const {
-          xp,
-          totalXP,
-          currentLevel,
-          currentTitle,
-          xpToNextLevel,
-          currentLevelProgress,
-          dailyStreak,
-          longestStreak,
-          totalQuestionsAsked,
-          totalQuizzesCompleted,
-          totalDocumentsGenerated,
-          totalStudyPlansCreated,
-          level,
-          ...syncableData
-        } = nextState;
-
-        setDoc(doc(db, "users", firebaseUser.uid), syncableData, {
-          merge: true,
-        }).catch((err) => {
-          // console.error("Failed to sync profile subset:", err);
+        setDoc(doc(db, "users", firebaseUser.uid), nextState, { merge: true }).catch(err => {
+          console.warn("Failed to sync background profile", err);
         });
       }
+
       return nextState;
     });
   };
 
-  useEffect(() => {
-    // Disabled localstorage to ensure fresh realtime DB state
-  }, [profile]);
+  const [firebaseUser, setFirebaseUser] = useState<any | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [showAuthModal, setShowAuthModal] = useState(false);
 
+  const [authName, setAuthName] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [isSignUp, setIsSignUp] = useState(true);
   const [authError, setAuthError] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
 
-  // Handle manual account authentication action
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setFirebaseUser(user);
+      if (user) {
+        // Fetch or create profile
+        try {
+          const docRef = doc(db, "users", user.uid);
+          const docSnap = await getDoc(docRef);
+          if (docSnap.exists()) {
+            setProfile(docSnap.data() as UserAcademicProfile);
+          } else {
+            const newProfile = { ...defaultProfile, email: user.email || "" };
+            await setDoc(docRef, newProfile);
+            setProfile(newProfile);
+          }
+        } catch(e) {
+           console.error("fetch profile err", e);
+        }
+      }
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setAuthError("");
-    if (!authEmail.trim() || !authPassword || (isSignUp && !authName.trim())) {
-      setAuthError("Please fill in all requested fields!");
-      return;
-    }
-
     setActionLoading(true);
+    setAuthError("");
     try {
       if (isSignUp) {
-        const userCred = await createUserWithEmailAndPassword(
-          auth,
-          authEmail.trim(),
-          authPassword,
-        );
-        // Save default profile to firestore
-        const newProfile: UserAcademicProfile = { 
-          ...defaultProfile, 
-          fullName: authName.trim(),
-          email: authEmail.trim(),
-          xp: 0,
-          totalXP: 0,
-          currentLevel: 1,
-          level: 1,
-          currentTitle: "Learning Explorer",
-          currentLevelProgress: 0,
-          xpToNextLevel: 100
-        };
+        const userCred = await createUserWithEmailAndPassword(auth, authEmail.trim(), authPassword);
+        const newProfile = { ...defaultProfile, fullName: authName || "Student", email: authEmail.trim() };
         await setDoc(doc(db, "users", userCred.user.uid), newProfile);
         setProfile(newProfile);
       } else {
-        const userCred = await signInWithEmailAndPassword(
-          auth,
-          authEmail.trim(),
-          authPassword,
-        );
-        // Load profile from firestore
-        const docSnap = await getDoc(doc(db, "users", userCred.user.uid));
-        if (docSnap.exists()) {
-          setProfile(docSnap.data() as UserAcademicProfile);
-        }
+        await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword);
       }
       setShowAuthModal(false);
     } catch (err: any) {
-      // console.error(err);
-      if (err.code === "auth/email-already-in-use") {
-        setAuthError("This email is already in use. Please sign in instead.");
-      } else if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
-        setAuthError("Invalid email or password.");
-      } else if (err.code === "auth/weak-password") {
-        setAuthError("Password should be at least 6 characters.");
-      } else if (err.code === "auth/operation-not-allowed") {
-        setAuthError("Email/Password login is not enabled in your Firebase project. Please enable it in Firebase Console -> Authentication -> Sign-in method.");
-      } else {
-        setAuthError(`Error: ${err.message || "Something went wrong."}`);
-      }
+      setAuthError(err.message || "Something went wrong.");
     } finally {
       setActionLoading(false);
     }
@@ -243,25 +206,11 @@ export default function App() {
     setActionLoading(true);
     setAuthError("");
     try {
-      const provider = new GoogleAuthProvider();
-      const userCred = await signInWithPopup(auth, provider);
-      
+      const userCred = await signInWithPopup(auth, googleProvider);
       const docRef = doc(db, "users", userCred.user.uid);
       const docSnap = await getDoc(docRef);
-      
       if (!docSnap.exists()) {
-        const newProfile: UserAcademicProfile = { 
-          ...defaultProfile, 
-          fullName: userCred.user.displayName || "Explorer",
-          email: userCred.user.email || "",
-          xp: 0,
-          totalXP: 0,
-          currentLevel: 1,
-          level: 1,
-          currentTitle: "Learning Explorer",
-          currentLevelProgress: 0,
-          xpToNextLevel: 100
-        };
+        const newProfile = { ...defaultProfile, fullName: userCred.user.displayName || "Student", email: userCred.user.email || "" };
         await setDoc(docRef, newProfile);
         setProfile(newProfile);
       } else {
@@ -269,95 +218,11 @@ export default function App() {
       }
       setShowAuthModal(false);
     } catch (err: any) {
-      if (err.code === "auth/operation-not-allowed") {
-        setAuthError("Google Login is not enabled. Please enable it in the Firebase Console (Authentication > Sign-in method).");
-      } else if (err.code === "auth/popup-closed-by-user") {
-        // Safe to ignore if they closed the popup
-      } else {
-        setAuthError(`Google Sign-In Error: ${err.message || "Something went wrong."}`);
-      }
+      setAuthError(err.message || "Google Sign In Failed.");
     } finally {
       setActionLoading(false);
     }
   };
-
-  const handleSignOut = async () => {
-    try {
-      await signOut(auth);
-    } catch (err: any) {
-      // console.error("Error signing out:", err);
-    }
-  };
-
-  useEffect(() => {
-    setAuthLoading(true);
-    let unsubscribeSnapshot: () => void;
-
-    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
-      setFirebaseUser(user);
-      if (user) {
-        // Realtime sync
-        unsubscribeSnapshot = onSnapshot(
-          doc(db, "users", user.uid),
-          (docSnap) => {
-            if (docSnap.exists()) {
-              const data = docSnap.data() as Partial<UserAcademicProfile>;
-
-              // Reconcile XP fields
-              const xp =
-                data.totalXP !== undefined
-                  ? data.totalXP
-                  : data.xp !== undefined
-                    ? data.xp
-                    : 0;
-              const currentLevel = data.currentLevel || 1;
-              const currentTitle = data.currentTitle || "Learning Explorer";
-
-              setProfile((prev) => ({
-                ...prev,
-                ...data,
-                xp,
-                totalXP: xp,
-                currentLevel,
-                currentTitle,
-                level: currentLevel,
-              }));
-            } else {
-              // Fallback profile init
-              const initData = { 
-                ...defaultProfile, 
-                email: user.email,
-                xp: 0,
-                totalXP: 0,
-                currentLevel: 1,
-                level: 1,
-                currentTitle: "Learning Explorer",
-                currentLevelProgress: 0,
-                xpToNextLevel: 100
-              };
-              setProfile((prev) => ({ ...prev, ...initData }));
-              setDoc(
-                doc(db, "users", user.uid),
-                initData,
-                { merge: true },
-              );
-            }
-          },
-        );
-
-        // Ensure daily streak is updated
-        checkDailyStreak(user.uid);
-      } else {
-        if (unsubscribeSnapshot) unsubscribeSnapshot();
-      }
-      setAuthLoading(false);
-    });
-
-    return () => {
-      unsubscribeAuth();
-      if (unsubscribeSnapshot) unsubscribeSnapshot();
-    };
-  }, []);
 
   const isCrimson = theme === "NovaCrimson";
 
@@ -369,168 +234,17 @@ export default function App() {
     );
   }
 
-  if (!firebaseUser) {
-    return (
-      <div className={`min-h-screen relative w-full text-white transition-colors duration-550 select-none overflow-x-hidden ${isCrimson ? "bg-[#080202]" : "bg-[#030612]"} flex items-center justify-center p-4`}>
-        {/* TOP LEFT LOGO */}
-        <div className="absolute top-6 left-6 flex items-center gap-3 z-30">
-          <NeonBrainLogo isCrimson={isCrimson} className="w-10 h-10 rounded-[12px]" />
-          <span className="text-lg font-black text-white tracking-widest uppercase">Nova AI</span>
-        </div>
-
-        {/* GLOWING ORBITS ACCENTS BACKDROP (Frosted Glass Theme) */}
-        <div
-          className={`absolute top-[-100px] right-[-100px] w-96 h-96 blur-[120px] rounded-full pointer-events-none transition-all duration-550 ${isCrimson ? "bg-red-600/15" : "bg-blue-600/20"}`}
-        ></div>
-        <div
-          className={`absolute bottom-[-100px] left-[-100px] w-96 h-96 blur-[120px] rounded-full pointer-events-none transition-all duration-550 ${isCrimson ? "bg-amber-600/10" : "bg-purple-600/10"}`}
-        ></div>
-
-        <div className="w-full max-w-sm p-8 rounded-3xl bg-zinc-950/80 backdrop-blur-xl border border-zinc-800 shadow-2xl relative z-10">
-          <div className="flex bg-zinc-900 rounded-full p-1 mb-8">
-            <button
-              onClick={() => setIsSignUp(false)}
-              className={`flex-1 py-2.5 rounded-full text-sm font-bold transition-all ${
-                !isSignUp
-                  ? isCrimson ? "bg-red-600 text-white shadow-lg shadow-red-900/20" : "bg-blue-600 text-white shadow-lg shadow-blue-900/20"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
-            >
-              Login
-            </button>
-            <button
-              onClick={() => setIsSignUp(true)}
-              className={`flex-1 py-2.5 rounded-full text-sm font-bold transition-all ${
-                isSignUp
-                  ? isCrimson ? "bg-red-600 text-white shadow-lg shadow-red-900/20" : "bg-blue-600 text-white shadow-lg shadow-blue-900/20"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
-            >
-              Signup
-            </button>
-          </div>
-
-          <form onSubmit={handleAuthSubmit} className="space-y-4">
-            {authError && (
-              <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs text-center font-medium">
-                {authError}
-              </div>
-            )}
-
-            {isSignUp && (
-              <div className="space-y-1.5">
-                <input
-                  type="text"
-                  value={authName}
-                  onChange={(e) => setAuthName(e.target.value)}
-                  placeholder="Full Name"
-                  className="w-full bg-transparent text-white px-4 py-3.5 rounded-xl border border-zinc-800 placeholder-zinc-500 focus:outline-none focus:border-zinc-600 focus:bg-zinc-900/50 transition-all text-sm"
-                  required
-                />
-              </div>
-            )}
-
-            <div className="space-y-1.5">
-              <input
-                type="email"
-                value={authEmail}
-                onChange={(e) => setAuthEmail(e.target.value)}
-                placeholder="Email Address"
-                className="w-full bg-transparent text-white px-4 py-3.5 rounded-xl border border-zinc-800 placeholder-zinc-500 focus:outline-none focus:border-zinc-600 focus:bg-zinc-900/50 transition-all text-sm"
-                required
-              />
-            </div>
-
-            <div className="space-y-1.5 relative">
-              <input
-                type={showPassword ? "text" : "password"}
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                placeholder="Password"
-                className="w-full bg-transparent text-white px-4 py-3.5 rounded-xl border border-zinc-800 placeholder-zinc-500 focus:outline-none focus:border-zinc-600 focus:bg-zinc-900/50 transition-all text-sm pr-12"
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200"
-              >
-                {showPassword ? (
-                  <EyeOff className="w-5 h-5" />
-                ) : (
-                  <Eye className="w-5 h-5" />
-                )}
-              </button>
-            </div>
-
-            {!isSignUp && (
-              <div className="text-left w-full">
-                <button
-                  type="button"
-                  className={`text-xs font-semibold hover:underline ${isCrimson ? "text-red-400" : "text-blue-400"}`}
-                >
-                  Forgot password?
-                </button>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={actionLoading}
-              className={`w-full py-3.5 mt-2 rounded-2xl font-bold text-sm text-white cursor-pointer transition-all shadow-lg flex justify-center items-center gap-2 ${isCrimson ? "bg-red-700 hover:bg-red-600 shadow-red-900/20" : "bg-blue-700 hover:bg-blue-600 shadow-blue-900/20"}`}
-            >
-              {actionLoading ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : null}
-              {isSignUp ? "Signup" : "Login"}
-            </button>
-
-            <div className="relative flex items-center py-2">
-              <div className="flex-grow border-t border-zinc-800"></div>
-              <span className="flex-shrink-0 mx-4 text-zinc-500 text-xs font-medium uppercase tracking-wider">or</span>
-              <div className="flex-grow border-t border-zinc-800"></div>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleGoogleSignIn}
-              disabled={actionLoading}
-              className="w-full py-3.5 rounded-2xl font-bold text-sm text-white cursor-pointer transition-all flex justify-center items-center gap-2 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800"
-            >
-              <svg className="w-5 h-5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-              </svg>
-              Continue with Google
-            </button>
-          </form>
-
-          <div className="mt-8 text-center text-sm">
-            <span className="text-zinc-400">
-              {isSignUp ? "Already have an account? " : "Create an account "}
-            </span>
-            <button
-              onClick={() => setIsSignUp(!isSignUp)}
-              className={`font-semibold hover:underline ${isCrimson ? "text-red-400" : "text-blue-400"}`}
-            >
-              {isSignUp ? "Login now" : "Signup now"}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Determine if we should show the auth overlay
+  const shouldShowAuth = !firebaseUser && showAuthModal;
 
   return (
     <div className={`min-h-screen relative w-full text-white transition-colors duration-550 select-none overflow-x-hidden ${isCrimson ? "bg-[#080202]" : "bg-[#030612]"}`}>
       {/* GLOWING ORBITS ACCENTS BACKDROP (Frosted Glass Theme) */}
       <div
-        className={`absolute top-[-100px] right-[-100px] w-96 h-96 blur-[120px] rounded-full pointer-events-none transition-all duration-550 ${isCrimson ? "bg-red-600/15" : "bg-blue-600/20"}`}
+        className={`fixed top-[-100px] right-[-100px] w-96 h-96 blur-[120px] rounded-full pointer-events-none transition-all duration-550 ${isCrimson ? "bg-red-600/15" : "bg-blue-600/20"}`}
       ></div>
       <div
-        className={`absolute bottom-[-100px] left-[-100px] w-96 h-96 blur-[120px] rounded-full pointer-events-none transition-all duration-550 ${isCrimson ? "bg-amber-600/10" : "bg-purple-600/10"}`}
+        className={`fixed bottom-[-100px] left-[-100px] w-96 h-96 blur-[120px] rounded-full pointer-events-none transition-all duration-550 ${isCrimson ? "bg-amber-600/10" : "bg-purple-600/10"}`}
       ></div>
 
       {/* TOP HEADER GLOBAL BRANDING BAR */}
@@ -554,87 +268,165 @@ export default function App() {
 
         {/* Sync Profile control info on header */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {authLoading ? (
-            <Loader2 className="w-4 h-4 text-white/40 animate-spin" />
-          ) : firebaseUser ? (
-            <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5">
+            {firebaseUser ? (
               <span
-                className="text-xs font-mono font-bold hover:underline text-emerald-400 capitalize hidden sm:inline"
-                title={firebaseUser.email}
+                className="text-xs font-mono font-bold text-blue-400 capitalize hidden sm:inline flex items-center gap-1 cursor-pointer hover:opacity-80"
+                onClick={() => signOut(auth)}
+                title="Sign Out"
               >
-                ● Synced: {profile.fullName.split(" ")[0]}
+                ● Connected: {profile.fullName.split(" ")[0]}
               </span>
-              <button
-                onClick={handleSignOut}
-                className="px-3.5 py-1.5 rounded-xl border border-white/10 bg-white/5 text-white/70 hover:text-white font-bold text-xs cursor-pointer transition-colors backdrop-blur-md"
+            ) : (
+              <span
+                className="text-xs font-mono font-bold text-red-400 capitalize hidden sm:inline flex items-center gap-1 cursor-pointer hover:opacity-80 transition-opacity"
+                onClick={() => setShowAuthModal(true)}
               >
-                Logout
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setShowAuthModal(true)}
-              className={`px-3.5 py-1.5 rounded-xl font-bold text-xs text-white cursor-pointer transition-all flex items-center gap-1 shadow-lg backdrop-blur-md border border-white/10 ${
-                isCrimson
-                  ? "bg-red-600/35 hover:bg-red-600/50"
-                  : "bg-blue-600/35 hover:bg-blue-600/50"
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-              Sync Cloud Profile
-            </button>
-          )}
+                ● Sign In Required
+              </span>
+            )}
+          </div>
         </div>
       </header>
 
       {/* PRIMARY VIEWS CONTAINER PORTAL */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-32">
-        {activeTab === "dashboard" && (
-          <DashboardTab
-            profile={profile}
-            setProfile={setProfile}
-            theme={theme}
+      {firebaseUser && (
+        <>
+          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-32">
+            {activeTab === "dashboard" && (
+              <DashboardTab
+                profile={profile}
+                setProfile={setProfile}
+                theme={theme}
+                setActiveTab={setActiveTab}
+                firebaseUser={firebaseUser}
+              />
+            )}
+            {activeTab === "planner" && (
+              <PlannerTab
+                profile={profile}
+                setProfile={setProfile}
+                theme={theme}
+                firebaseUser={firebaseUser}
+              />
+            )}
+            {activeTab === "arsenal" && (
+              <ArsenalTab
+                profile={profile}
+                setProfile={setProfile}
+                theme={theme}
+                firebaseUser={firebaseUser}
+              />
+            )}
+            {activeTab === "profile" && (
+              <ProfileTab
+                profile={profile}
+                setProfile={setProfile}
+                theme={theme}
+                setTheme={setTheme}
+                handleSignOut={() => signOut(auth)}
+                firebaseUser={firebaseUser}
+              />
+            )}
+          </main>
+
+          <BottomNav
+            activeTab={activeTab}
             setActiveTab={setActiveTab}
-            firebaseUser={firebaseUser}
-          />
-        )}
-
-        {activeTab === "planner" && (
-          <PlannerTab
-            profile={profile}
-            setProfile={setProfile}
             theme={theme}
-            firebaseUser={firebaseUser}
           />
-        )}
+        </>
+      )}
 
-        {activeTab === "arsenal" && (
-          <ArsenalTab
-            profile={profile}
-            setProfile={setProfile}
-            theme={theme}
-            firebaseUser={firebaseUser}
-          />
-        )}
+      {/* AUTH MODAL OVERLAY */}
+      {!firebaseUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className={`w-full max-w-md p-8 rounded-3xl border shadow-2xl relative ${isCrimson ? "bg-[#080202] border-red-500/20" : "bg-[#030612] border-blue-500/20"}`}>
+            <div className="flex flex-col items-center mb-6">
+              <NeonBrainLogo isCrimson={isCrimson} className="w-16 h-16 rounded-2xl mb-4" />
+              <h2 className="text-2xl font-black tracking-tight">{isSignUp ? "Create Account" : "Welcome Back"}</h2>
+              <p className="text-sm text-white/50 mt-1 text-center">Sync your progress and connect with workspace tools.</p>
+            </div>
 
-        {activeTab === "profile" && (
-          <ProfileTab
-            profile={profile}
-            setProfile={setProfile}
-            theme={theme}
-            setTheme={setTheme}
-            handleSignOut={handleSignOut}
-            firebaseUser={firebaseUser}
-          />
-        )}
-      </main>
+            {authError && (
+              <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm text-center">
+                {authError}
+              </div>
+            )}
 
-      {/* CORE FLOATING BOT NAVIGATION BAR */}
-      <BottomNav
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        theme={theme}
-      />
+            <form onSubmit={handleAuthSubmit} className="space-y-4">
+              {isSignUp && (
+                <div>
+                  <label className="text-xs font-medium text-white/50 uppercase tracking-widest pl-1 mb-1 block">Full Name</label>
+                  <input
+                    type="text"
+                    required={isSignUp}
+                    value={authName}
+                    onChange={e => setAuthName(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-white/30 transition-colors"
+                    placeholder="E.g. Alex"
+                  />
+                </div>
+              )}
+              <div>
+                <label className="text-xs font-medium text-white/50 uppercase tracking-widest pl-1 mb-1 block">Email</label>
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={e => setAuthEmail(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-white/30 transition-colors"
+                  placeholder="name@example.com"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-white/50 uppercase tracking-widest pl-1 mb-1 block">Password</label>
+                <input
+                  type="password"
+                  required
+                  value={authPassword}
+                  onChange={e => setAuthPassword(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-white/30 transition-colors"
+                  placeholder="••••••••"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={actionLoading}
+                className={`w-full flex items-center justify-center gap-2 py-3 mt-4 rounded-xl font-bold bg-white text-black hover:bg-white/90 transition-all ${actionLoading ? "opacity-50 cursor-not-allowed" : ""}`}
+              >
+                {actionLoading && <Loader2 className="w-5 h-5 animate-spin" />}
+                {isSignUp ? "Sign Up" : "Sign In"}
+              </button>
+            </form>
+
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/10"></div></div>
+              <div className="relative flex justify-center text-sm"><span className={`px-2 text-white/50 ${isCrimson ? "bg-[#080202]" : "bg-[#030612]"}`}>Or continue with</span></div>
+            </div>
+
+            <button
+              onClick={handleGoogleSignIn}
+              disabled={actionLoading}
+              className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold border border-white/10 bg-white/5 text-white hover:bg-white/10 transition-all ${actionLoading ? "opacity-50 cursor-not-allowed" : ""}`}
+            >
+              Sign in with Google
+            </button>
+
+            <div className="mt-6 text-center text-sm text-white/50">
+              {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
+              <button 
+                type="button" 
+                onClick={() => setIsSignUp(!isSignUp)}
+                className={`font-semibold hover:underline ${isCrimson ? "text-red-400" : "text-blue-400"}`}
+              >
+                {isSignUp ? "Sign In" : "Sign Up"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

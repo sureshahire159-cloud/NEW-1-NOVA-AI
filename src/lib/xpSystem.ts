@@ -1,13 +1,5 @@
-import {
-  doc,
-  getDoc,
-  setDoc,
-  runTransaction,
-  serverTimestamp,
-  collection,
-  addDoc,
-} from "firebase/firestore";
 import { db } from "./firebase";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 
 export const LEVEL_TITLES = [
   { maxLevel: 3, title: "Learning Explorer" },
@@ -150,75 +142,36 @@ export function getTitle(level: number): string {
 }
 
 export async function checkDailyStreak(userId: string) {
-  if (!userId) return;
-  const userRef = doc(db, "users", userId);
+  if (!userId || userId === "local" || userId === "local_user") return;
   try {
-    await runTransaction(db, async (transaction) => {
-      const userDoc = await transaction.get(userRef);
-      let data: any = {};
+    const docRef = doc(db, "users", userId);
+    const docSnap = await getDoc(docRef);
+    if (!docSnap.exists()) return;
+    const data = docSnap.data();
+    const lastLogin = data.lastLoginTimestamp;
+    const now = Date.now();
+    const isNewDay = !lastLogin || (new Date(now).setHours(0,0,0,0) > new Date(lastLogin).setHours(0,0,0,0));
+    
+    if (isNewDay) {
+      const isConsecutive = lastLogin && (new Date(now).setHours(0,0,0,0) - new Date(lastLogin).setHours(0,0,0,0) <= 86400000);
+      const currentStreak = isConsecutive ? (data.dailyStreak || 0) + 1 : 1;
+      const longestStreak = Math.max(currentStreak, data.longestStreak || 0);
 
-      if (userDoc.exists()) {
-        data = userDoc.data();
-      }
+      await setDoc(docRef, {
+        lastLoginTimestamp: now,
+        dailyStreak: currentStreak,
+        longestStreak
+      }, { merge: true });
 
-      const lastActive = data.lastActiveDate || "";
-      const today = new Date().toISOString().split("T")[0];
-
-      if (lastActive === today) return; // Already checked in today
-
-      let currentStreak = data.dailyStreak || 0;
-      let longestStreak = data.longestStreak || 0;
-
-      // Check if they were active yesterday
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split("T")[0];
-
-      if (lastActive === yesterdayStr) {
-        currentStreak += 1;
-      } else {
-        // Streak broken
-        currentStreak = 1;
-      }
-
-      if (currentStreak > longestStreak) {
-        longestStreak = currentStreak;
-      }
-
-      transaction.set(
-        userRef,
-        {
-          dailyStreak: currentStreak,
-          streak: currentStreak, // compat
-          longestStreak,
-          lastActiveDate: today,
-          lastActiveAt: serverTimestamp(),
-        },
-        { merge: true },
-      );
-
-      // Update global analytics for DAU passively
-      const globalDailyRef = doc(db, "analytics", `dau_${today}`);
-      transaction.set(
-        globalDailyRef,
-        {
-          activeUsers: data.lastActiveDate !== today ? 1 : 0, // In standard firestore we would use FieldValue.increment(1) without getting doc, but we must use set with merge if needed
-          date: today,
-        },
-        { merge: true },
-      );
-
-      // Note: we just touch the document, a proper aggregation would use field increments
-      // but runTransaction limits us to one approach. We'll skip complex global aggregation
-      // in the client transaction to prevent massive write contention.
-      // Firebase automatically tracks MAU/DAU natively through Google Analytics anyway.
-    });
-  } catch (e) {
-    console.error("Streak check failed", e);
+      if (currentStreak === 7) awardXP(userId, "STREAK_7_DAY");
+      if (currentStreak === 30) awardXP(userId, "STREAK_30_DAY");
+      awardXP(userId, "DAILY_LOGIN");
+    }
+  } catch (err) {
+    console.error("Streak check error", err);
   }
 }
 
-// Below is the existing awardXP function
 export async function awardXP(
   userId: string,
   actionId: keyof typeof XP_REWARDS,
@@ -226,125 +179,74 @@ export async function awardXP(
   feature?: string,
   metadata?: any,
 ) {
-  if (!userId) return;
-
-  const userRef = doc(db, "users", userId);
-  const logRef = collection(db, "user_activity");
-
+  const earnedXP = XP_REWARDS[actionId] || 0;
+  if (!earnedXP) return;
+  
+  // Local profile sync
   try {
-    await runTransaction(db, async (transaction) => {
-      const userDoc = await transaction.get(userRef);
-      let userData: any = {};
+    const rawProfile = localStorage.getItem("nova_profile");
+    if (rawProfile) {
+      const profile = JSON.parse(rawProfile);
+      let xp = profile.xp || 0;
+      xp += earnedXP;
+      profile.xp = xp;
+      profile.totalXP = xp;
+      
+      const { level, title, nextLevelReq, progress } = getLevelForXP(xp);
+      profile.currentLevel = level;
+      profile.level = level;
+      profile.currentTitle = title;
+      profile.xpToNextLevel = nextLevelReq;
+      profile.currentLevelProgress = progress;
 
-      if (userDoc.exists()) {
-        userData = userDoc.data();
-      }
+      if (actionId.includes("QUESTION")) profile.totalQuestionsAsked = (profile.totalQuestionsAsked || 0) + 1;
+      if (actionId.includes("RESUME")) profile.totalResumesCreated = (profile.totalResumesCreated || 0) + 1;
+      if (actionId.includes("STUDY_PLAN")) profile.totalStudyPlansCreated = (profile.totalStudyPlansCreated || 0) + 1;
+      if (actionId.includes("QUIZ")) profile.totalQuizzesCompleted = (profile.totalQuizzesCompleted || 0) + 1;
+      
+      localStorage.setItem("nova_profile", JSON.stringify(profile));
+    }
+  } catch(e) {}
 
-      // Read current state
-      let currentTotalXP =
-        userData.totalXP !== undefined
-          ? userData.totalXP
-          : userData.xp !== undefined
-            ? userData.xp
-            : 0;
+  if (!userId || userId === "local" || userId === "local_user") return;
 
-      // Prevent duplicates
-      if (deduplicationId) {
-        let dedupHistory = userData.processedXPEvents || [];
-        if (dedupHistory.includes(deduplicationId)) {
-          return; // Already awarded
-        }
-        dedupHistory.push(deduplicationId);
-        // keep only last 50 to avoid big array
-        if (dedupHistory.length > 50) {
-          dedupHistory = dedupHistory.slice(-50);
-        }
-        transaction.set(
-          userRef,
-          { processedXPEvents: dedupHistory },
-          { merge: true },
-        );
-      }
-
-      const rewardAmount = XP_REWARDS[actionId] || 0;
-      const newXP = currentTotalXP + rewardAmount;
-      const calc = getLevelForXP(newXP);
-
-      const featureName = feature || actionId.split("_")[0] || "SYSTEM";
-
-      const updates: any = {
-        totalXP: newXP,
-        xp: newXP, // for backwards compat
-        currentLevel: calc.level,
-        currentTitle: calc.title,
-        xpToNextLevel: calc.nextLevelReq - newXP,
-        currentLevelProgress: calc.progress,
-        updatedAt: serverTimestamp(),
-        lastActiveAt: serverTimestamp(), // requested by prompt 'lastActiveAt' instead of 'lastActivityAt'
-      };
-
-      // Handle stats tracking based on action
-      if (actionId === "ASK_QUESTION" || actionId === "FOLLOW_UP_QUESTION") {
-        updates.totalQuestionsAsked = (userData.totalQuestionsAsked || 0) + 1;
-      }
-      if (actionId === "GENERATE_SUMMARY" || actionId === "UPLOAD_DOCUMENT") {
-        updates.totalDocumentsGenerated =
-          (userData.totalDocumentsGenerated || 0) + 1;
-      }
-      if (
-        actionId === "COMPLETE_QUIZ" ||
-        actionId === "QUIZ_SCORE_80" ||
-        actionId === "QUIZ_PERFECT_SCORE"
-      ) {
-        updates.totalQuizzesCompleted =
-          (userData.totalQuizzesCompleted || 0) + 1;
-      }
-      if (actionId === "RESUME_CREATED") {
-        updates.totalResumesCreated = (userData.totalResumesCreated || 0) + 1;
-      }
-      if (actionId === "CREATE_STUDY_PLAN") {
-        updates.totalStudyPlansCreated =
-          (userData.totalStudyPlansCreated || 0) + 1;
-      }
-      if (
-        actionId === "FOCUS_SESSION_COMPLETED"
-      ) {
-        updates.totalStudyTime = (userData.totalStudyTime || 0) + 25; // 25 mins pomodoro
-      }
-
-      transaction.set(userRef, updates, { merge: true });
-
-      const newLogRef = doc(logRef);
-      transaction.set(newLogRef, {
-        userId,
-        feature: featureName,
-        action: actionId,
-        xpEarned: rewardAmount,
-        timestamp: serverTimestamp(),
-        metadata: metadata || {},
-      });
-    });
-  } catch (e) {
-    console.error("XP transaction failed: ", e);
-  }
-}
-
-// Kept for partial backward compatibility if anything else needs it directly
-export async function recordActivity(userId: string, statKey: string) {
-  if (!userId) return;
-  const userRef = doc(db, "users", userId);
+  // Firebase remote sync
   try {
-    await runTransaction(db, async (transaction) => {
-      const userDoc = await transaction.get(userRef);
-      if (userDoc.exists()) {
-        const v = userDoc.data()[statKey] || 0;
-        transaction.update(userRef, {
-          [statKey]: v + 1,
-          updatedAt: serverTimestamp(),
-        });
-      }
+    const docRef = doc(db, "users", userId);
+    const docSnap = await getDoc(docRef);
+    if (!docSnap.exists()) return;
+    const profile = docSnap.data();
+
+    let xp = profile.xp || 0;
+    xp += earnedXP;
+    profile.xp = xp;
+    profile.totalXP = xp;
+    
+    const { level, title, nextLevelReq, progress } = getLevelForXP(xp);
+    profile.currentLevel = level;
+    profile.level = level;
+    profile.currentTitle = title;
+    profile.xpToNextLevel = nextLevelReq;
+    profile.currentLevelProgress = progress;
+
+    if (actionId.includes("QUESTION")) profile.totalQuestionsAsked = (profile.totalQuestionsAsked || 0) + 1;
+    if (actionId.includes("RESUME")) profile.totalResumesCreated = (profile.totalResumesCreated || 0) + 1;
+    if (actionId.includes("STUDY_PLAN")) profile.totalStudyPlansCreated = (profile.totalStudyPlansCreated || 0) + 1;
+    if (actionId.includes("QUIZ")) profile.totalQuizzesCompleted = (profile.totalQuizzesCompleted || 0) + 1;
+
+    await setDoc(docRef, profile, { merge: true });
+
+    // Save XP transaction to history
+    const xpRef = doc(db, `users/${userId}/xp_transactions`, `${Date.now()}_${actionId}`);
+    await setDoc(xpRef, {
+      xpAmount: earnedXP,
+      actionId,
+      feature,
+      metadata,
+      timestamp: Date.now()
     });
-  } catch (e) {
-    console.error("Failed recording activity", e);
+
+  } catch(e) {
+    console.error("XP Firebase Sync Error", e);
   }
 }

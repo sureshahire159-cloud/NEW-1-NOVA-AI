@@ -31,14 +31,12 @@ import { awardXP } from "../lib/xpSystem";
 import { jsPDF } from "jspdf";
 import html2canvas from "html2canvas";
 import { IndianEducationLevel, IndianBoard, AIStudyPlan, WorkspaceTheme, UserAcademicProfile } from "../types";
-import { db } from "../lib/firebase";
-import { doc, setDoc, getDoc, collection, getDocs, query, orderBy, limit, deleteDoc } from "firebase/firestore";
 
 interface PlannerTabProps {
   profile: UserAcademicProfile;
   setProfile: React.Dispatch<React.SetStateAction<UserAcademicProfile>>;
   theme: WorkspaceTheme;
-  firebaseUser: any;
+  firebaseUser?: any;
 }
 
 export default function PlannerTab({ profile, setProfile, theme, firebaseUser }: PlannerTabProps) {
@@ -69,12 +67,10 @@ export default function PlannerTab({ profile, setProfile, theme, firebaseUser }:
 
   React.useEffect(() => {
     async function loadPlannerState() {
-      if (!firebaseUser) return;
       try {
-        const pRef = doc(db, "users", firebaseUser.uid, "planner", "latest");
-        const snap = await getDoc(pRef);
-        if (snap.exists()) {
-          const data = snap.data();
+        const snap = localStorage.getItem("nova_planner_latest");
+        if (snap) {
+          const data = JSON.parse(snap);
           if (data.academicLevel) setAcademicLevel(data.academicLevel);
           if (data.board) setBoard(data.board);
           if (data.subjectsList) setSubjectsList(data.subjectsList);
@@ -93,7 +89,7 @@ export default function PlannerTab({ profile, setProfile, theme, firebaseUser }:
       }
     }
     loadPlannerState();
-  }, [firebaseUser]);
+  }, []);
 
   // Subjects Management
   const addSubject = (e: React.FormEvent) => {
@@ -177,23 +173,20 @@ export default function PlannerTab({ profile, setProfile, theme, firebaseUser }:
         board
       }));
 
-      if (firebaseUser) {
-        try {
-          const pRef = doc(db, "users", firebaseUser.uid, "planner", "latest");
-          await setDoc(pRef, {
-            academicLevel,
-            board,
-            subjectsList,
-            dailyHours,
-            examDate,
-            priorityLevel,
-            weakSubjects,
-            generatedPlan: planItem
-          });
-          setSaved(true);
-        } catch (err) {
-          // console.error("Save to cloud failed:", err);
-        }
+      try {
+        const planData = {
+          academicLevel,
+          board,
+          subjectsList,
+          dailyHours,
+          examDate,
+          priorityLevel,
+          weakSubjects,
+          generatedPlan: planItem
+        };
+        localStorage.setItem("nova_planner_latest", JSON.stringify(planData));
+        setSaved(true);
+      } catch (err) {
       }
 
     } catch (error) {
@@ -208,32 +201,31 @@ export default function PlannerTab({ profile, setProfile, theme, firebaseUser }:
   const handleSaveToCloud = async () => {
     if (!generatedPlan) return;
     
-    if (firebaseUser) {
-      try {
-        const timestamp = Date.now().toString();
-        const pRef = doc(db, "users", firebaseUser.uid, "planner", "latest");
-        const historyRef = doc(db, "users", firebaseUser.uid, "planner_history", timestamp);
-        const planData = {
-          academicLevel,
-          board,
-          subjectsList,
-          dailyHours,
-          examDate,
-          priorityLevel,
-          weakSubjects,
-          generatedPlan,
-          createdAt: timestamp
-        };
-        await setDoc(pRef, planData);
-        await setDoc(historyRef, planData);
-      } catch (err) {
-        // console.error(err);
-      }
+    try {
+      const timestamp = Date.now().toString();
+      const planData = {
+        academicLevel,
+        board,
+        subjectsList,
+        dailyHours,
+        examDate,
+        priorityLevel,
+        weakSubjects,
+        generatedPlan,
+        createdAt: timestamp,
+        id: timestamp
+      };
+      localStorage.setItem("nova_planner_latest", JSON.stringify(planData));
+      const historyStr = localStorage.getItem("nova_planner_history");
+      const history = historyStr ? JSON.parse(historyStr) : [];
+      history.push(planData);
+      localStorage.setItem("nova_planner_history", JSON.stringify(history));
+    } catch (err) {
     }
 
     if (!saved) {
       // Reward XP on saving plan only once
-      awardXP(firebaseUser?.uid, "CREATE_STUDY_PLAN");
+      awardXP(firebaseUser?.uid || "local_user", "CREATE_STUDY_PLAN");
     }
 
     // Offline simulation fallback
@@ -243,13 +235,9 @@ export default function PlannerTab({ profile, setProfile, theme, firebaseUser }:
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const handleDeletePlan = async () => {
-    if (firebaseUser) {
-      try {
-        const pRef = doc(db, "users", firebaseUser.uid, "planner", "latest");
-        await deleteDoc(pRef);
-      } catch (err) {
-        // console.error("Delete failed:", err);
-      }
+    try {
+      localStorage.removeItem("nova_planner_latest");
+    } catch (err) {
     }
     setGeneratedPlan(null);
     setSaved(false);
@@ -259,29 +247,23 @@ export default function PlannerTab({ profile, setProfile, theme, firebaseUser }:
 
   const handleDeleteHistoryItem = async (e: React.MouseEvent, planId: string) => {
     e.stopPropagation();
-    if (!firebaseUser) return;
     try {
-      const pRef = doc(db, "users", firebaseUser.uid, "planner_history", planId);
-      await deleteDoc(pRef);
+      const historyStr = localStorage.getItem("nova_planner_history");
+      if (historyStr) {
+        const history = JSON.parse(historyStr);
+        const newHistory = history.filter((p: any) => p.id !== planId);
+        localStorage.setItem("nova_planner_history", JSON.stringify(newHistory));
+      }
       setHistoryPlans(prev => prev.filter(p => p.id !== planId));
     } catch (err) {
-      // console.error("Delete history item failed:", err);
     }
   };
 
   const loadHistory = async () => {
-    if (!firebaseUser) return;
     try {
-      const q = query(
-        collection(db, "users", firebaseUser.uid, "planner_history"),
-        limit(20)
-      );
-      const querySnapshot = await getDocs(q);
-      const plans: any[] = [];
-      querySnapshot.forEach((doc) => {
-        plans.push({ id: doc.id, ...doc.data() });
-      });
-      plans.sort((a, b) => {
+      const historyStr = localStorage.getItem("nova_planner_history");
+      const plans = historyStr ? JSON.parse(historyStr) : [];
+      plans.sort((a: any, b: any) => {
         const timeA = a.createdAt ? parseInt(a.createdAt) : 0;
         const timeB = b.createdAt ? parseInt(b.createdAt) : 0;
         return timeB - timeA;
@@ -289,7 +271,6 @@ export default function PlannerTab({ profile, setProfile, theme, firebaseUser }:
       setHistoryPlans(plans);
       setShowHistory(true);
     } catch (err) {
-      // console.error("Load history failed:", err);
       setShowHistory(true);
     }
   };
