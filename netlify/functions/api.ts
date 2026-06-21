@@ -1,6 +1,9 @@
 import serverless from "serverless-http";
+import express from "express";
 import { app } from "../../server";
 
-export const handler = serverless(app, {
-  basePath: '/.netlify/functions/api',
-});
+const wrapper = express();
+wrapper.use('/.netlify/functions/api', app);
+wrapper.use(app);
+
+export const handler = serverless(wrapper);
