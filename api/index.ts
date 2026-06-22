@@ -1,9 +1,6 @@
-import { app } from "../server";
-
-console.log("Vercel backend initialized.");
-if (!process.env.NVIDIA_API_KEY) {
-    console.error("NVIDIA_API_KEY is missing in Vercel environment variables. AI integrations will fail.");
+export default function handler(req: any, res: any) {
+  res.status(200).json({
+    success: true,
+    message: "API working"
+  });
 }
-
-export const maxDuration = 60; // Set max duration for Vercel
-export default app;
