@@ -1,28 +1,10 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import express from "express";
 import path from "path";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
 import cors from "cors";
 
-import { GoogleGenAI } from "@google/genai";
-
 dotenv.config();
-
-let aiClient: GoogleGenAI | null = null;
-function getAI() {
-  if (!aiClient) {
-    if (!process.env.GEMINI_API_KEY) {
-       console.error("Critical: GEMINI_API_KEY is not defined in the environment.");
-    }
-    aiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "dummy_key" });
-  }
-  return aiClient;
-}
 
 const app = express();
 app.use(cors());
@@ -38,41 +20,84 @@ function getNvidiaKey() {
   return key;
 }
 
-async function fetchWithRetry(url: string, options: any, retries = 3, backoffMs = 1500) {
+// Robust fetch with retry, customized headers, and safer timeouts
+async function fetchWithRetry(url: string, options: any, retries = 2, backoffMs = 1500) {
   for (let i = 0; i < retries; i++) {
     try {
       const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), 25000); // 25s timeout per request for Vercel margin
-      const response = await fetch(url, { ...options, signal: controller.signal });
+      // Increase timeout to 50s for heavier LLM models to prevent premature timeout
+      const id = setTimeout(() => controller.abort(), 50000); 
+      const mergedHeaders = {
+        "User-Agent": "Mozilla/5.0",
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      };
+      
+      const response = await fetch(url, { 
+        ...options, 
+        headers: mergedHeaders, 
+        signal: controller.signal 
+      });
       clearTimeout(id);
       
       if (!response.ok) {
-        throw new Error(`API Error: ${response.status} ${response.statusText}`);
+        let errText = "";
+        try { errText = await response.text(); } catch (e) {}
+        throw new Error(`API Error: ${response.status} ${response.statusText}. Details: ${errText}`);
       }
       return response;
     } catch (err: any) {
       console.warn(`[Backend] Fetch failed (Attempt ${i + 1}/${retries}): ${err.message}`);
       if (i === retries - 1) throw err;
       await new Promise(res => setTimeout(res, backoffMs));
-      backoffMs *= 2; // Exponential backoff
+      backoffMs *= 1.5; // Exponential backoff
     }
   }
   throw new Error("API request failed after retries.");
 }
 
+// Centralized Universal AI Helper connecting to NVIDIA NIM
+async function runNvidiaAI(
+  model: string, 
+  messages: any[], 
+  opts: { temperature?: number, maxTokens?: number, stream?: boolean } = {}
+) {
+  const NVIDIA_KEY = getNvidiaKey();
+  const url = "https://integrate.api.nvidia.com/v1/chat/completions";
+  
+  const body: any = {
+    model,
+    messages,
+    temperature: opts.temperature ?? 0.2,
+    max_tokens: opts.maxTokens ?? 2048,
+    stream: opts.stream ?? false
+  };
+
+  const response = await fetchWithRetry(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${NVIDIA_KEY}`
+    },
+    body: JSON.stringify(body)
+  }, 2, 1000);
+
+  if (opts.stream) {
+    return response;
+  }
+  
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || "";
+}
+
 function extractJSON(content: string) {
     try {
         let text = content.trim();
-        // Remove markdown wrappers if any
         text = text.replace(/^```((?:\w+)?)\n?/i, '').replace(/```$/i, '').trim();
-        
-        // Find boundaries
         const firstBrace = text.indexOf('{');
         const lastBrace = text.lastIndexOf('}');
         const firstBracket = text.indexOf('[');
         const lastBracket = text.lastIndexOf(']');
         
-        // Determine if it's an array or object
         if (firstBrace !== -1 && lastBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
             text = text.substring(firstBrace, lastBrace + 1);
         } else if (firstBracket !== -1 && lastBracket !== -1) {
@@ -95,7 +120,6 @@ app.get("/api/health", (req, res) => {
 app.post("/api/generate-strategy", async (req, res) => {
   try {
     const { academicLevel, board, subjects, dailyHours, examDate, priorityLevel, weakSubjects } = req.body;
-
     const prompt = `You are NOVA AI, an advanced academic planning assistant.
 
 Your task is to generate a premium, professional, PDF-ready Study Strategy Report based on the student's input.
@@ -109,150 +133,6 @@ INPUT VARIABLES:
 - Urgency Level: ${priorityLevel}
 - Weak Subjects: ${weakSubjects?.join(", ")}
 
-OUTPUT REQUIREMENTS:
-
-Generate a visually structured report in clean professional formatting.
-
-========================================
-NOVA AI
-SMARTER LEARNING. BETTER FUTURES.
-========================================
-
-ACADEMIC STUDY STRATEGY
-
-STUDENT PROFILE
-• Education Level: ${academicLevel}
-• Board: ${board}
-• Subjects: ${subjects?.join(", ")}
-• Daily Commitment: ${dailyHours}
-• Target Exam Date: ${examDate}
-• Urgency Level: ${priorityLevel}
-
-----------------------------------------
-PERSONALIZED STUDY ANALYSIS
-----------------------------------------
-
-Generate a detailed AI analysis including:
-• Current preparation stage
-• Estimated syllabus completion requirement
-• Recommended study intensity
-• Weak subject improvement strategy
-• Risk areas before examination
-• AI recommendations for maximum score improvement
-
-----------------------------------------
-DAILY TIMETABLE
-----------------------------------------
-
-Create a realistic study schedule based on:
-• Daily study commitment
-• Number of subjects
-• Weak subjects priority
-• Revision requirements
-
-For each session provide:
-Time Slot | Subject | Activity | Goal
-
-Example:
-1:00 PM - 1:45 PM | Accountancy | Theory Learning | Concept Building
-
-----------------------------------------
-WEEKLY STUDY PLAN
-----------------------------------------
-
-Generate:
-Monday-Sunday schedule
-
-Include:
-• Theory Study
-• Practice Questions
-• Revision Sessions
-• Mock Tests
-• Doubt Solving
-• Progress Tracking
-
-----------------------------------------
-ROADMAP TO EXAM
-----------------------------------------
-
-Create 5 milestone phases:
-
-Phase 1:
-Syllabus Completion
-Target Date
-
-Phase 2:
-Concept Reinforcement
-Target Date
-
-Phase 3:
-Practice & Question Solving
-Target Date
-
-Phase 4:
-Mock Tests & Performance Analysis
-Target Date
-
-Phase 5:
-Final Revision & Exam Readiness
-Target Date
-
-Dates must be automatically calculated from today's date and target exam date.
-
-----------------------------------------
-WEAK SUBJECT IMPROVEMENT PLAN
-----------------------------------------
-
-For every weak subject generate:
-• Major weak areas
-• Daily improvement tasks
-• Weekly targets
-• Recommended revision frequency
-
-----------------------------------------
-AI SUCCESS STRATEGY
-----------------------------------------
-
-Generate:
-• Productivity tips
-• Focus techniques
-• Memory retention techniques
-• Revision formula
-• Exam preparation advice
-
-----------------------------------------
-FINAL SCORE PREDICTION
-----------------------------------------
-
-Generate:
-• Preparation Score (0-100)
-• Consistency Score
-• Readiness Level
-
-Display:
-Beginner / Moderate / Strong / Exam Ready
-
-----------------------------------------
-PDF DESIGN REQUIREMENTS
-----------------------------------------
-
-Use:
-• White background
-• Premium corporate layout
-• NOVA AI branding on top
-• Professional spacing
-• Section dividers
-• Modern typography
-• Timeline style roadmap
-• Study icons where applicable
-• Clean tables
-• No markdown syntax
-• PDF-ready formatting
-• One-page or multi-page layout based on content
-• Mobile and desktop PDF compatibility
-
-The report must look like a premium AI-generated educational consultancy report and be ready for direct PDF export without any manual editing. 
-
 CRITICAL: You must return the output STRICTLY as a JSON object, with no markdown wrappers. Do NOT output the text report, just output the JSON object that contains the data to generate the report.
 The JSON must contain exactly:
 {
@@ -263,18 +143,11 @@ The JSON must contain exactly:
   "examRoadmap": ["Phase 1: ...", "Phase 2: ...", "Phase 3: ...", "Phase 4: ...", "Phase 5: ..."]
 }`;
 
-    const response = await getAI().models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        temperature: 0.2,
-        responseMimeType: "application/json"
-      }
-    });
+    const text = await runNvidiaAI("meta/llama-3.3-70b-instruct", [
+      { role: "user", content: prompt }
+    ], { temperature: 0.2, maxTokens: 3000 });
 
-    const text = response.text || "{}";
-    const output = JSON.parse(text);
-
+    const output = extractJSON(text);
     res.json(output);
   } catch (error) {
     console.error("Error generating strategy:", error);
@@ -283,106 +156,35 @@ The JSON must contain exactly:
 });
 
 // 3. Doubt Solver Helper and Endpoint
-async function runDoubtSolverAI({
-  query,
-  subject,
-  level,
-  board,
-  teachingMode,
-  history = []
-}: {
-  query: string;
-  subject: string;
-  level: string;
-  board: string;
-  teachingMode: string;
-  history?: { role: "user" | "assistant"; content: string }[];
-}) {
-  // 1. Detect dynamic question complexity (Kept for metadata but prompt handles it)
-  const lowerQuery = query.toLowerCase();
-  const wordCount = query.trim().split(/\s+/).length;
-  
-  let questionComplexity: "Simple" | "Medium" | "Advanced" = "Medium";
-  if (wordCount < 10) questionComplexity = "Simple";
-  else if (wordCount > 30) questionComplexity = "Advanced";
-
-  const systemInstruction = `You are an advanced, empathetic, and highly intelligent AI Doubt Solver for a student study website. Your goal is to provide accurate, real-time, and easy-to-understand explanations. Always adhere to the following strict operational, behavioral, and formatting rules:
-
-Response Length & Depth:
-Keep all responses highly concise. The entire answer must be deeply detailed but strictly limited to 15 lines or fewer. Avoid unnecessary fluff or dense walls of text.
-
-Adaptation to Complexity:
-CRITICAL RULE FOR SIMPLE QUESTIONS: For basic factual questions or simple math (e.g., "2+2", "What is the capital of France?"), you MUST provide ONLY the direct answer. DO NOT add any filler words, pleasantries, or explanations. If the student asks "2+2", you must reply exactly and ONLY with "4".
-Complex/Hard Questions (e.g., advanced math, science concepts, history analysis): Break the concept down into simple, easy-to-digest steps that are easy for a student to understand.
-
-Formatting, Charts & Flowcharts:
-Use clean Markdown formatting: clear headings (##), bold text for key terms, and bullet points to maximize scannability.
-When explaining processes, cycles, or structures, automatically include a text-based flowchart (using arrows like A -> B) or a simple Markdown table/chart to make it visually easy for the student to comprehend.
-
-Accuracy & Real-Time Data:
-Ensure all facts, data, and explanations are 100% correct, educationally sound, and up-to-date by utilizing your real-time search capabilities.
-
-Tone & System Constraints:
-Act as an encouraging, supportive, and brilliant peer or tutor.
-Focus purely on generating the correct text response. Do not comment on or attempt to modify the website's design, layout, or backend features (such as the chat delete functionality).`;
-
-  const messages = [
-    { role: "system", content: systemInstruction }
-  ];
-
-  for (const h of history) {
-    messages.push({ role: h.role === "assistant" ? "assistant" : "user", content: h.content });
-  }
-
-  messages.push({ role: "user", content: query });
-
-  let responseText = "";
-  const NVIDIA_KEY = getNvidiaKey();
-
-  try {
-    const aiModel = "meta/llama-3.1-8b-instruct";
-    console.log(`[Backend] Utilizing NVIDIA ${aiModel} for doubt solving. Complexity: ${questionComplexity}`);
-    const nvidiaResponse = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${NVIDIA_KEY}`
-      },
-      body: JSON.stringify({
-        model: aiModel,
-        messages: messages,
-        temperature: questionComplexity === "Simple" ? 0.1 : 0.3,
-        max_tokens: questionComplexity === "Simple" ? 128 : 2048
-      })
-    });
-
-    const data = await nvidiaResponse.json();
-    responseText = data.choices[0]?.message?.content || "I was unable to answer the question.";
-  } catch (err) {
-    console.error("NVIDIA Tier failed:", err);
-    throw new Error("Unable to contact AI doubt solver provider. Please try again later.");
-  }
-
-  let cleanedText = responseText;
-  let metadata: any = null;
-
-  return { solution: cleanedText, metadata };
-}
-
 app.post("/api/solve-doubt", async (req, res) => {
   try {
     const { query: rawQuery, subject, level, board, history = [], teachingMode = "Intermediate" } = req.body;
     
-    const { solution, metadata } = await runDoubtSolverAI({
-      query: rawQuery,
-      subject,
-      level,
-      board,
-      teachingMode,
-      history
+    let questionComplexity: "Simple" | "Medium" | "Advanced" = "Medium";
+    if (rawQuery.trim().split(/\s+/).length < 10) questionComplexity = "Simple";
+
+    const systemInstruction = `You are an advanced, empathetic, and highly intelligent AI Doubt Solver for a student study website. Provide accurate, real-time, and easy-to-understand explanations.
+
+Response Length & Depth:
+Keep all responses highly concise. Deeply detailed but strictly limited to 15 lines or fewer.
+
+Adaptation to Complexity:
+CRITICAL RULE FOR SIMPLE QUESTIONS: For basic factual questions or simple math (e.g., "2+2", "What is the capital of France?"), you MUST provide ONLY the direct answer without filler words.
+Complex questions: Break concepts down into simple, easy-to-digest steps. Use markdown tables or logic text-flowcharts (A -> B).`;
+
+    const messages = [
+      { role: "system", content: systemInstruction },
+      ...history.map((h: any) => ({ role: h.role === "assistant" ? "assistant" : "user", content: h.content })),
+      { role: "user", content: rawQuery }
+    ];
+
+    console.log(`[Backend] Utilizing NVIDIA meta/llama-3.3-70b-instruct for doubt solving.`);
+    const text = await runNvidiaAI("meta/llama-3.3-70b-instruct", messages, { 
+       temperature: questionComplexity === "Simple" ? 0.1 : 0.3,
+       maxTokens: questionComplexity === "Simple" ? 256 : 2048
     });
 
-    res.json({ solution, metadata });
+    res.json({ solution: text, metadata: null });
   } catch (error) {
     console.error("Doubt Solver error:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Doubt solver failed." });
@@ -399,22 +201,8 @@ app.post("/api/generate-chat-title", async (req, res) => {
 Doubt: "${query}"
 Return ONLY raw title, no quotes, no extra chat text, no numbers.`;
 
-      const NVIDIA_KEY = getNvidiaKey();
-      const nvidiaResponse = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${NVIDIA_KEY}`
-        },
-        body: JSON.stringify({
-          model: "meta/llama-3.1-8b-instruct",
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.1,
-          max_tokens: 30
-        })
-      });
-      const data = await nvidiaResponse.json();
-      title = data.choices[0]?.message?.content?.trim() || "New Doubt Chat";
+      const text = await runNvidiaAI("meta/llama-3.3-70b-instruct", [{ role: "user", content: prompt }], { temperature: 0.1, maxTokens: 30 });
+      title = text.trim() || "New Doubt Chat";
     } catch (e) {
       title = query.split(" ").slice(0, 3).join(" ") || "New Doubt Chat";
     }
@@ -428,33 +216,14 @@ Return ONLY raw title, no quotes, no extra chat text, no numbers.`;
 app.post("/api/synthesize", async (req, res) => {
   try {
     const { documentName, fileBase64, mimeType, textContent } = req.body;
-    
-    // As requested: NVIDIA API details logged and available
-    const NVIDIA_LLAMA_KEY = getNvidiaKey();
-    const NVIDIA_MIXTRAL_KEY = getNvidiaKey();
-    console.log(`[Backend Info] Environment configured with NVIDIA API Keys for llama-3.3-70b-instruct and mixtral-8x7b-instruct-v0.1 for high-performance processing capabilities.`);
+    console.log(`[Backend Info] Environment configured with NVIDIA NIM Models (llama 3.3 70b and mixtral)`);
 
-    const prompt = `You are "EduPulse AI"—an advanced, highly intelligent AI Tutor and Document Synthesizer for a student study website. You are analyzing a document: "${documentName}".
+    const prompt = `You are "EduPulse AI"—an advanced AI Tutor analyzing a document: "${documentName}".
+1. Do not just summarize. Extract critical definitions, core formulas, and concepts.
+2. Automatically generate Workflow/Flowchart text diagrams (Step A -> Step B).
+3. Provide 3 to 5 high-yield Flashcards.
+4. Keep the ENTIRE output under 15-20 lines using tight Markdown formatting.`;
 
-1. Document Synthesis & Extraction (Advanced):
-- Do not just summarize it. Extract critical definitions, core formulas, and pivotal concepts.
-- Automatically generate the following study assets from the document text:
-  * Workflow/Flowchart: Represent processes chronologically or structurally using clear text arrows (e.g., Step A -> Step B).
-  * Flashcards: Create a dedicated section with 3 to 5 high-yield "Front: [Question] / Back: [Answer]" flashcard pairs for active recall.
-
-3. Response Length & Adaptation:
-- Length Constraint: Keep all responses highly concise. The entire output—including text, charts, and flashcards—must be detailed but compressed into 15 lines or fewer using tight formatting. Avoid walls of text.
-
-4. Formatting & Tone:
-- Structure your output cleanly using Markdown: headers (##), bold text for key terms, and bullet points.
-- Act as an encouraging, supportive, and brilliant expert peer. 
-
-5. System Constraints:
-- Focus purely on text generation and data extraction. Do not comment on, alter, or simulate backend API routing, security keys, chat deletion mechanisms, or the website's visual design. Trust that the backend handles all API keys and file parsing perfectly.`;
-
-    const parts: any[] = [];
-    
-    // Add text format detection for DOCX
     let inlineText = textContent;
     if (fileBase64 && mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
       const buffer = Buffer.from(fileBase64, "base64");
@@ -462,8 +231,7 @@ app.post("/api/synthesize", async (req, res) => {
       inlineText = (inlineText || "") + "\n" + result.value;
     }
     
-    // Determine if we must use Gemini for vision/PDF tasks
-    // If not, we can utilize the user's provided NVIDIA llama-3.3-70b-instruct API
+    // Multimodal routing
     const isMultimodal = fileBase64 && mimeType && mimeType !== "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     
     res.writeHead(200, {
@@ -472,54 +240,36 @@ app.post("/api/synthesize", async (req, res) => {
       "Connection": "keep-alive"
     });
 
+    const messages = [];
+
     if (isMultimodal) {
-        console.log("[Backend] Utilizing Gemini 2.5 Flash for multimodal/PDF synthesis.");
-        const aiModel = getAI().models;
-        const fileData = {
-           inlineData: { data: fileBase64, mimeType: mimeType }
-        };
-        const responseText = await aiModel.generateContentStream({
-            model: "gemini-2.5-flash",
-            contents: [fileData, prompt],
-            config: { temperature: 0.2 }
+        console.log("[Backend] Utilizing NVIDIA meta/llama-3.2-90b-vision-instruct for multimodal synthesis.");
+        messages.push({
+            role: "user",
+            content: [
+               { type: "text", text: prompt },
+               { type: "image_url", image_url: { url: `data:${mimeType};base64,${fileBase64}` } }
+            ]
         });
-        
-        for await (const chunk of responseText) {
-             const chunkText = chunk.text;
-             if (chunkText) {
-                 res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
-             }
-        }
-        res.end();
-        return;
+    } else {
+        console.log("[Backend] Utilizing NVIDIA meta/llama-3.3-70b-instruct for fast text synthesis.");
+        const combinedText = `Document text:\n${inlineText}\n\n` + prompt;
+        messages.push({ role: "user", content: combinedText });
     }
 
-    // Only text uploads allowed for NVIDIA
-    console.log("[Backend] Utilizing NVIDIA meta/llama-3.1-8b-instruct for fast text synthesis.");
+    const modelToUse = isMultimodal ? "meta/llama-3.2-90b-vision-instruct" : "meta/llama-3.3-70b-instruct";
     
-    // We expect the extracted text to be sent from the frontend if they are using mammoth etc
-    // Or plain text files
-    const combinedText = `Document text:\n${inlineText}\n\n` + prompt;
-    
-    const nvidiaResponse = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${NVIDIA_LLAMA_KEY}`
-      },
-      body: JSON.stringify({
-        model: "meta/llama-3.1-8b-instruct",
-        messages: [{role: "user", content: combinedText}],
-        temperature: 0.2,
-        max_tokens: 3000,
-        stream: true
-      })
+    const nvidiaResponse: any = await runNvidiaAI(modelToUse, messages, {
+         temperature: 0.2,
+         maxTokens: 3000,
+         stream: true
     });
 
     if (!nvidiaResponse.ok) {
-      throw new Error(`NVIDIA API Error: ${nvidiaResponse.statusText}`);
+       throw new Error(`NVIDIA API Stream Error: ${nvidiaResponse.statusText}`);
     }
 
+    // Stream decoding
     const reader = nvidiaResponse.body?.getReader();
     const decoder = new TextDecoder("utf-8");
     
@@ -528,8 +278,8 @@ app.post("/api/synthesize", async (req, res) => {
         const { done, value } = await reader.read();
         if (done) break;
         const chunkStr = decoder.decode(value, { stream: true });
-        const messages = chunkStr.split("\n\n");
-        for (const msg of messages) {
+        const lines = chunkStr.split("\n\n");
+        for (const msg of lines) {
           if (msg.startsWith("data: ") && msg !== "data: [DONE]") {
             try {
               const parsed = JSON.parse(msg.substring(6));
@@ -550,21 +300,15 @@ app.post("/api/synthesize", async (req, res) => {
   }
 });
 
-    // Document Chat Endpoint
+// Document Chat Endpoint
 app.post("/api/doc-chat", async (req, res) => {
   try {
     const { documentContent, history, query } = req.body;
     
-    const NVIDIA_LLAMA_KEY = getNvidiaKey();
-
-    const systemPrompt = `You are "EduPulse AI"—an advanced, highly intelligent AI Tutor and Document Synthesizer for a student study website.
-CRITICAL INSTRUCTIONS:
-- Actively reference, quote, and pull facts directly from the user's uploaded document to answer questions.
-- If a question cannot be answered by the document alone, seamlessly blend the document data with your general knowledge to provide an up-to-date, correct answer.
-- Simple Questions: Provide a direct, immediate, and friendly answer.
-- Complex/Hard Questions: Break the concept down into easy-to-digest steps.
-- Length Constraint: Keep all responses highly concise. The entire output must be deeply detailed but strictly limited to 15 lines or fewer using tight formatting. Avoid walls of text.
-- Formating: Use cleanly formatted Markdown: headers (##), bold text for key terms, and bullet points. Act as an encouraging, supportive peer.
+    const systemPrompt = `You are "EduPulse AI"—an advanced, highly intelligent AI Tutor.
+- Actively reference and quote facts directly from the user's uploaded document to answer questions.
+- If a question cannot be answered by the document alone, blend it with your general knowledge.
+- Length Constraint: Keep all responses highly concise. Strictly limited to 15 lines or fewer using tight formatting.
 
 DOCUMENT CONTEXT:
 ${documentContent}`;
@@ -575,23 +319,7 @@ ${documentContent}`;
       { role: "user", content: query }
     ];
 
-    const nvidiaResponse = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${NVIDIA_LLAMA_KEY}`
-      },
-      body: JSON.stringify({
-        model: "meta/llama-3.1-8b-instruct",
-        messages: messages,
-        temperature: 0.2,
-        max_tokens: 1024
-      })
-    });
-
-    const data = await nvidiaResponse.json();
-    const replyText = data.choices[0]?.message?.content || "I was unable to formulate an answer.";
-
+    const replyText = await runNvidiaAI("meta/llama-3.3-70b-instruct", messages, { temperature: 0.2, maxTokens: 1024 });
     res.json({ reply: replyText });
   } catch (err: any) {
     console.error("Doc chat error:", err);
@@ -615,8 +343,6 @@ app.post("/api/generate-quiz", async (req, res) => {
         return res.status(400).json({ error: "Education Level, Subject Category, and Specific Topic are required." });
     }
 
-    const NVIDIA_KEY = getNvidiaKey();
-
     const prompt = `Generate exactly ${count} multiple choice questions (MCQs) for a quiz.
 Education Level: ${educationLevel}
 Subject Category: ${subjectCategory}
@@ -628,29 +354,13 @@ The JSON must be an array of question objects where each object has exactly thes
 - "id": a unique string (e.g. "q1")
 - "question": the question string
 - "options": an array of exactly 4 strings
-- "correctAnswer": a number (0, 1, 2, or 3 representing the index of the correct option in the options array)
+- "correctAnswer": a number (0, 1, 2, or 3 representing the index of the correct option)
 - "explanation": a string explaining why that option is correct.
 
-Ensure the questions perfectly match the given topic, subject, level, and difficulty accurately. Randomize the correct option index across questions. Avoid duplicates. Avoid markdown output formatting, JUST JSON ARRAY:`;
+JUST JSON ARRAY:`;
 
-    const nvidiaResponse = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${NVIDIA_KEY}`
-      },
-      body: JSON.stringify({
-        model: "meta/llama-3.1-8b-instruct",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.3,
-        max_tokens: 3000
-      })
-    });
-
-    const data = await nvidiaResponse.json();
-    let text = data.choices[0]?.message?.content || "[]";
-    const questionsList = extractJSON(text);
-
+    const text = await runNvidiaAI("mistralai/mixtral-8x7b-instruct-v0.1", [{ role: "user", content: prompt }], { temperature: 0.3, maxTokens: 3000 });
+    const questionsList = extractJSON(text || "[]");
     res.json({ questions: questionsList });
   } catch (error) {
     console.error("Quiz Generator error:", error);
@@ -686,14 +396,9 @@ User Details:
 - Achievements: ${achievements || "None"}
 
 Please construct a professional resume in JSON format.
-STRICT DESIGN RULE: You MUST retain ALL information and exact details/words provided by the user. Do NOT aggressively rewrite, shorten, or remove information. Fix only clear grammatical errors while organizing the data into the requested JSON schema.
-Do NOT output empty items in arrays.
-
-Ensure the "optimizedSkills" matches the standard structure (Technical vs Soft Skills) if possible.
-
+STRICT DESIGN RULE: You MUST retain ALL information and exact details/words provided by the user. Organize the data into the requested JSON schema.
 Output strictly valid JSON only. Do not wrap in markdown. Format EXACTLY like this schema representation.
 
-Schema Representation:
 {
   "resumeScore": 95,
   "careerObjective": "Exactly what the user wrote for objective...",
@@ -719,24 +424,7 @@ Schema Representation:
   "languages": ["English (Fluent)"]
 }`;
 
-    const NVIDIA_KEY = getNvidiaKey();
-    
-    const fetchRes = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${NVIDIA_KEY}`
-      },
-      body: JSON.stringify({
-        model: "meta/llama-3.1-8b-instruct",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.1,
-        max_tokens: 3000
-      })
-    });
-
-    const data = await fetchRes.json();
-    const content = data.choices[0]?.message?.content || "{}";
+    const content = await runNvidiaAI("meta/llama-3.3-70b-instruct", [{ role: "user", content: prompt }], { temperature: 0.1, maxTokens: 3000 });
     
     let output = {};
     try {
@@ -745,7 +433,6 @@ Schema Representation:
         console.error("Resume generator parsing failed", content);
     }
     res.json(output);
-
   } catch (error) {
     console.error("Career Resume error:", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Resume generation failed." });
@@ -759,57 +446,34 @@ app.post("/api/parse-resume", async (req, res) => {
     let inputData = textContent || "";
 
     const prompt = `Act as an expert Resume Parser. Parse the following text into the structured format. 
-If a field is missing, leave it empty.
-Return ONLY valid JSON format.`;
+If a field is missing, leave it empty. Return ONLY valid JSON format.`;
+
+    const isMultimodal = fileBase64 && mimeType && mimeType !== "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
     if (fileBase64 && mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
         const buffer = Buffer.from(fileBase64, "base64");
         const result = await mammoth.extractRawText({ buffer });
         inputData += "\n" + result.value;
-    } else if (fileBase64 && (mimeType.startsWith("image/") || mimeType === "application/pdf" || mimeType.startsWith("application/"))) {
-        console.log("Using Gemini 1.5/2.5 for vision/PDF resume parsing");
-        try {
-            const aiModel = getAI().models;
-            const fileData = {
-                 inlineData: {
-                     data: fileBase64,
-                     mimeType: mimeType
-                 }
-            };
-            const response = await aiModel.generateContent({
-                 model: "gemini-2.5-flash",
-                 contents: [fileData, prompt],
-                 config: {
-                    responseMimeType: "application/json",
-                    temperature: 0.1
-                 }
-            });
-            const text = response.text || "{}";
-            return res.json(extractJSON(text));
-        } catch(err) {
-            console.error("Gemini fallback failed", err);
-        }
+    } 
+
+    const messages = [];
+    let modelToUse = "meta/llama-3.3-70b-instruct";
+
+    if (isMultimodal) {
+        modelToUse = "meta/llama-3.2-90b-vision-instruct";
+        messages.push({
+            role: "user",
+            content: [
+               { type: "text", text: prompt },
+               { type: "image_url", image_url: { url: `data:${mimeType};base64,${fileBase64}` } }
+            ]
+        });
+    } else {
+        const finalPrompt = `${prompt}\n\nResume Text:\n${inputData}`;
+        messages.push({ role: "user", content: finalPrompt });
     }
 
-    const finalPrompt = `${prompt}\n\nResume Text:\n${inputData}`;
-
-    const NVIDIA_KEY = getNvidiaKey();
-    const fetchRes = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${NVIDIA_KEY}`
-      },
-      body: JSON.stringify({
-        model: "meta/llama-3.1-8b-instruct",
-        messages: [{ role: "user", content: finalPrompt }],
-        temperature: 0.1,
-        max_tokens: 2048
-      })
-    });
-    
-    const data = await fetchRes.json();
-    const content = data.choices[0]?.message?.content || "{}";
+    const content = await runNvidiaAI(modelToUse, messages, { temperature: 0.1, maxTokens: 2500 });
     
     let output = {};
     try {
@@ -836,25 +500,8 @@ app.post("/api/polish-resume", async (req, res) => {
     }
 
     const prompt = `${instruction}\n\nInput Text:\n${text}`;
+    const content = await runNvidiaAI("meta/llama-3.3-70b-instruct", [{ role: "user", content: prompt }], { temperature: 0.1, maxTokens: 1024 });
 
-    const NVIDIA_KEY = getNvidiaKey();
-    const fetchRes = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${NVIDIA_KEY}`
-      },
-      body: JSON.stringify({
-        model: "meta/llama-3.1-8b-instruct",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.1,
-        max_tokens: 1024
-      })
-    });
-
-    const data = await fetchRes.json();
-    const content = data.choices[0]?.message?.content || "";
-    
     let dataText = content;
     dataText = dataText.replace(/^```((?:\w+)?)\n?/i, '').replace(/```$/i, '').trim();
     res.json({ polished: dataText });
@@ -868,7 +515,6 @@ app.post("/api/polish-resume", async (req, res) => {
 app.post("/api/auto-bio", async (req, res) => {
   try {
     const { fullName, academicLevel, board, schoolCollegeName, careerPersona } = req.body;
-
     const prompt = `Create a custom, high-octane motivational academic bio & study persona statement for an Indian student.
 Student Details:
 - Name: ${fullName}
@@ -878,27 +524,11 @@ Student Details:
 - Future Passion / Career context described: ${careerPersona || "Academic excellence"}
 
 Return a JSON containing:
-1. bio: A single-line witty, tech-inspired study slogan/description ("e.g. Class 12 Maverick targeting UPSC...").
+1. bio: A single-line witty, tech-inspired study slogan/description.
 2. motivationQuote: Custom neural spark motivational wisdom message customized for them (no more than 30 words).
 3. levelTitle: A custom fun title badge (e.g. "Board Champion", "Quantum Scholar", "Cognitive Voyager").`;
 
-    const NVIDIA_KEY = getNvidiaKey();
-    const fetchRes = await fetchWithRetry("https://integrate.api.nvidia.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${NVIDIA_KEY}`
-      },
-      body: JSON.stringify({
-        model: "meta/llama-3.1-8b-instruct",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.2,
-        max_tokens: 500
-      })
-    });
-    
-    const data = await fetchRes.json();
-    const content = data.choices[0]?.message?.content || "{}";
+    const content = await runNvidiaAI("meta/llama-3.3-70b-instruct", [{ role: "user", content: prompt }], { temperature: 0.2, maxTokens: 500 });
     
     let output = {};
     try {
@@ -934,7 +564,6 @@ async function startServer() {
     });
   }
 
-  // Only listen if not running in a serverless environment
   if (!process.env.LAMBDA_TASK_ROOT && !process.env.NETLIFY && !process.env.VERCEL) {
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`Nova Scholar Workspace server listening on port ${PORT}`);
