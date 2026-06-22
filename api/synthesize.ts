@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { runNvidiaAI } from './_utils';
+import { runNvidiaAI } from './utils';
 import mammoth from 'mammoth';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
