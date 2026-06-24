@@ -342,7 +342,7 @@ export default function ProfileTab({ profile, setProfile, theme, setTheme, handl
               <div className="p-5 rounded-3xl bg-white/5 border border-white/10 space-y-4">
                 <div className="flex justify-between items-center text-xs font-bold border-b border-white/10 pb-2">
                   <span className="text-white flex items-center gap-1"><Sparkles className={`w-3.5 h-3.5 ${isCrimson ? 'text-red-400' : 'text-blue-400'}`} /> AI Identity Customizer Slogans</span>
-                  <span className="text-white/40 font-mono text-[9px]">LAUNCH GEMINI ENGINE</span>
+                  <span className="text-white/40 font-mono text-[9px]">LAUNCH AI ENGINE</span>
                 </div>
 
                 <div className="space-y-4">

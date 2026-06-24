@@ -1,66 +1,13 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { runNvidiaAI, extractJSON } from './_utils.ts';
-import mammoth from 'mammoth';
+import type { Request, Response } from 'express';
+import { runGroqAI, extractJSON } from './_utils';
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  // Increase body size limit for Vercel
-  // This needs to be configured in vercel.json or next.config.js, 
-  // but we can parse here if it's already configured.
-
+export default async function handler(req: Request, res: Response) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
-    const { textContent, fileBase64, mimeType } = req.body;
-    let inputData = textContent || "";
-
-    const prompt = `Act as an expert Resume Parser. Parse the following text into the structured format. 
-If a field is missing, leave it empty. Return ONLY valid JSON format.`;
-
-    const isMultimodal = fileBase64 && mimeType && mimeType !== "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-
-    if (fileBase64 && mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-        const buffer = Buffer.from(fileBase64, "base64");
-        const result = await mammoth.extractRawText({ buffer });
-        inputData += "\n" + result.value;
-    } 
-
-    const messages = [];
-    let modelToUse = "meta/llama-3.3-70b-instruct";
-
-    if (isMultimodal) {
-        modelToUse = "meta/llama-3.2-90b-vision-instruct";
-        messages.push({
-            role: "user",
-            content: [
-               { type: "text", text: prompt },
-               { type: "image_url", image_url: { url: `data:${mimeType};base64,${fileBase64}` } }
-            ]
-        });
-    } else {
-        const finalPrompt = `${prompt}\n\nResume Text:\n${inputData}`;
-        messages.push({ role: "user", content: finalPrompt });
-    }
-
-    const content = await runNvidiaAI(modelToUse, messages, { temperature: 0.1, maxTokens: 2500 });
-    
-    let output = {};
-    try {
-        output = extractJSON(content);
-    } catch (e) {
-        console.error("JSON parse failed, model returned:", content);
-    }
-    return res.status(200).json(output);
-  } catch (error) {
-    console.error("Parse Error:", error);
-    return res.status(500).json({ error: "Failed to parse document" });
-  }
+    const { text, targetRole } = req.body;
+    const prompt = `Parse this resume text and extract fields into JSON matching this structure exactly (return only JSON). Target role: ${targetRole}\nResume: ${text}\n\nJSON Schema: { "name": "", "email": "", "phone": "", "location": "", "website": "", "objective": "", "experience": [{ "company": "", "role": "", "duration": "", "location": "", "responsibilities": [""] }], "education": [{ "institution": "", "degree": "", "duration": "", "location": "", "gpa": "", "coursework": [""] }], "projects": [{ "name": "", "techStack": [""], "link": "", "description": [""] }], "skills": { "languages": [""], "frameworks": [""], "tools": [""], "softSkills": [""] }, "certifications": [{ "name": "", "issuer": "", "date": "" }], "achievements": [""] }`;
+    const content = await runGroqAI("llama-3.3-70b-versatile", [{ role: "user", content: prompt }], { temperature: 0.1, maxTokens: 2500 });
+    const jsonStr = extractJSON(content);
+    res.json(JSON.parse(jsonStr));
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
 }
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: '10mb',
-    },
-  },
-};

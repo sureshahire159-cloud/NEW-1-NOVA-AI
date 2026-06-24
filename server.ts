@@ -1,9 +1,21 @@
 import express from 'express';
 import path from 'path';
-import fs from 'fs';
+import { createServer as createViteServer } from 'vite';
 import cors from 'cors';
 
-const PORT = 3000;
+import autoBioHandler from './api/auto-bio';
+import docChatHandler from './api/doc-chat';
+import generateChatTitleHandler from './api/generate-chat-title';
+import generateQuizHandler from './api/generate-quiz';
+import generateResumeHandler from './api/generate-resume';
+import generateStrategyHandler from './api/generate-strategy';
+import logHandler from './api/log';
+import parseResumeHandler from './api/parse-resume';
+import polishResumeHandler from './api/polish-resume';
+import solveDoubtHandler from './api/solve-doubt';
+import synthesizeHandler from './api/synthesize';
+
+const PORT = Number(process.env.PORT) || 3000;
 
 async function startServer() {
   const app = express();
@@ -11,39 +23,21 @@ async function startServer() {
   app.use(cors());
   app.use(express.json({ limit: '50mb' }));
 
-  // Read all API routes
-  const apiDir = path.join(process.cwd(), 'api');
-  if (fs.existsSync(apiDir)) {
-    const files = fs.readdirSync(apiDir);
-    for (const file of files) {
-      if (file.endsWith('.ts') && !file.startsWith('_')) {
-        const routeName = file.replace('.ts', '');
-        console.log(`Mapping /api/${routeName}`);
-        app.all(`/api/${routeName}`, async (req, res) => {
-          try {
-            // dynamically import
-            const modulePath = path.join(apiDir, file);
-            // using tsx, we can import .ts files natively? Yes! Or .js if compiled.
-            // But we can just import the path! Wait, in ESM, dynamic import might need file:// 
-            const mod = await import(`file://${modulePath}`);
-            const handler = mod.default;
-            if (handler) {
-               await handler(req, res);
-            } else {
-               res.status(500).json({ error: "No default export" });
-            }
-          } catch (e: any) {
-            console.error(`Error in /api/${routeName}:`, e);
-            res.status(500).json({ error: e.message });
-          }
-        });
-      }
-    }
-  }
+  // Map routes manually for better esbuild bundling
+  app.all('/api/auto-bio', autoBioHandler);
+  app.all('/api/doc-chat', docChatHandler);
+  app.all('/api/generate-chat-title', generateChatTitleHandler);
+  app.all('/api/generate-quiz', generateQuizHandler);
+  app.all('/api/generate-resume', generateResumeHandler);
+  app.all('/api/generate-strategy', generateStrategyHandler);
+  app.all('/api/log', logHandler);
+  app.all('/api/parse-resume', parseResumeHandler);
+  app.all('/api/polish-resume', polishResumeHandler);
+  app.all('/api/solve-doubt', solveDoubtHandler);
+  app.all('/api/synthesize', synthesizeHandler);
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
-    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
