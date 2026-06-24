@@ -1,6 +1,12 @@
 @import "tailwindcss";
 
 @layer base {
+  html, body {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
   html {
     scroll-behavior: smooth;
     font-size: 115%; /* Increased for better visibility as requested globally */

@@ -1,10 +1,7 @@
 {
   "version": 2,
+  "devCommand": "npm run dev",
   "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api"
-    },
     {
       "source": "/(.*)",
       "destination": "/index.html"
