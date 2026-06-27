@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import cors from 'cors';
+import 'dotenv/config';
 
 import autoBioHandler from './api/auto-bio';
 import docChatHandler from './api/doc-chat';
